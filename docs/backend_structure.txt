@@ -634,28 +634,44 @@ PUT  /teacher/exams/:examId/students/:studentId   { ball }   -> 204    (blocked 
 ```
 GET   /admin/dashboard        -> { studentsCount, teachersCount, groupsCount, freeSlotsToday, upcomingPayments:[...], lastNotices:[...] }
 
-# O'quvchilar
+# O'quvchilar  (tahrirlash va o'chirish ham bor)
 GET   /admin/students         ?q=&groupId=         -> [ { id, fullName, phone, login, groups:[...], passwordChangedAt, isNew } ]
 POST  /admin/students         { fullName, phone, login, password, groupIds:[...] }   -> student
          tekshiruvlar: ism >= 2 so'z; telefon +998 XX XXX XX XX; login unikal va 4-30 belgi; parol >= 8; guruh sig'imi
 POST  /admin/students/:id/enrol   { groupId }                                        -> 204   (sig'im, takror tekshiruvi)
 PUT   /admin/students/:id/account { login?, password? }                              -> 204   (login unikal; parol xeshlanadi)
 
+PUT   /admin/students/:id         { fullName?, phone? }                              -> 204
+DELETE /admin/students/:id        hisobni o'chiradi (isActive=false), guruhlardagi joyi bo'shaydi -> 204
+DELETE /admin/students/:id/groups/:groupId   guruhdan chiqarish                       -> 204
+
 # Ustozlar
 GET   /admin/teachers         -> [ { id, fullName, phone, login, groups:[...], passwordChangedAt } ]
 POST  /admin/teachers         { fullName, phone, login, password }                   -> teacher
+PUT   /admin/teachers/:id         { fullName?, phone? }                              -> 204
+DELETE /admin/teachers/:id        faol guruhi bo'lsa 409; bo'lmasa hisob o'chiriladi   -> 204
 PUT   /admin/teachers/:id/account { login?, password? }                              -> 204
+
+# Adminlar
+GET   /admin/admins               -> [ { id, fullName, phone, login, passwordChangedAt, isNew } ]
+POST  /admin/admins               { fullName, phone?, login, password }               -> admin
+PUT   /admin/admins/:id           { fullName?, phone? }                              -> 204
+PUT   /admin/admins/:id/account   { login?, password? }                              -> 204 (parol o'zgarsa, uning sessiyalari tugaydi)
+DELETE /admin/admins/:id          o'zini va oxirgi adminni o'chirib bo'lmaydi (409)    -> 204
 
 # Xonalar
 GET   /admin/rooms            -> [ { id, name, capacity } ]
 POST  /admin/rooms            { name, capacity }                                     -> room   (nom unikal, sig'im 1..60)
 PUT   /admin/rooms/:id        { name, capacity }                                     -> room
+DELETE /admin/rooms/:id       faol guruh ishlatayotgan xonani o'chirib bo'lmaydi (409)  -> 204
 GET   /admin/rooms/timetable  ?day=MON         -> { slots:["08:00",...], rooms:[ { id,name,capacity, cells:{ "08:00": null | {groupId,groupName,teacher} } } ] }
 GET   /admin/rooms/free       ?days=MON,WED&start=18:00   -> [ roomId, ... ]   (hamma ko'rsatilgan kunlarda bo'sh xonalar)
 
 # Guruhlar
 GET   /admin/groups           -> [ { id,name,course,teacher,members,capacity,schedule:[{day,start,end,roomId,roomName}],plan:{amount,dueDate} } ]
 POST  /admin/groups           { name, course, teacherId, days:['MON','WED'], start:'18:00', roomId, amount, dueDate }   -> group
+PUT   /admin/groups/:id       { name?, course?, teacherId?, days?, start?, roomId? }  -> group  (jadval: kunlar+vaqt+xona birga; band bo'lsa 409)
+DELETE /admin/groups/:id      dars o'tilmagan bo'lsa o'chadi, o'tilgan bo'lsa ARXIVLANADI ({ result: 'deleted' | 'archived' })
          tekshiruvlar: 6.7 (xona bandligi, ustoz to'qnashuvi, amount >= 10000, dueDate >= bugun)
 
 # To'lovlar

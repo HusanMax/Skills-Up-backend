@@ -1,13 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { unprocessable } from '../common/errors';
+import { conflict, unprocessable } from '../common/errors';
 import { RULES } from '../config/rules';
-import { Room } from '../entities';
+import { Group, GroupSchedule, Room } from '../entities';
 
 @Injectable()
 export class RoomsService {
-  constructor(@InjectRepository(Room) private rooms: Repository<Room>) {}
+  constructor(
+    @InjectRepository(Room) private rooms: Repository<Room>,
+    @InjectRepository(GroupSchedule) private schedules: Repository<GroupSchedule>,
+    @InjectRepository(Group) private groups: Repository<Group>,
+  ) {}
 
   all() {
     return this.rooms.find({ order: { id: 'ASC' } });
@@ -41,5 +45,22 @@ export class RoomsService {
     room.name = name.trim();
     room.capacity = capacity;
     return this.rooms.save(room);
+  }
+
+  /**
+   * Deletes a room. A room that an ACTIVE group still uses cannot be deleted (409): move or delete that group first.
+   * Archived groups that pointed at it become "online" (no room).
+   */
+  async remove(id: number) {
+    const room = await this.rooms.findOneBy({ id });
+    if (!room) throw new NotFoundException('Xona topilmadi.');
+    const rows = await this.schedules.findBy({ roomId: id });
+    if (rows.length) {
+      const active = await this.groups.find({ where: { isActive: true } });
+      const using = active.filter((g) => rows.some((r) => r.groupId === g.id));
+      if (using.length) throw conflict(`Xona “${room.name}” hozir ishlatilmoqda: ${using.map((g) => g.name).join(', ')}. Avval guruhni boshqa xonaga ko'chiring yoki o'chiring.`);
+      await this.schedules.update({ roomId: id }, { roomId: null });
+    }
+    await this.rooms.delete({ id });
   }
 }

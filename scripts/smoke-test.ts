@@ -271,6 +271,69 @@ async function main() {
   check('admin resets the password', (await call('PUT', `/admin/students/${zid}/account`, admin, { password: 'Yangi99887a' })).status === 204);
   check('every session of that student is gone (401)', (await call('GET', '/me', tokenB)).status === 401 && (await call('GET', '/me', tokenD)).status === 401);
 
+
+  console.log('7. admin: full management (edit and delete rooms, groups, teachers, students; more admins)');
+  check('student cannot delete a room (403)', (await call('DELETE', `/admin/rooms/${newRoom.body.id}`, student)).status === 403);
+  const eRoom = await call('POST', '/admin/rooms', admin, { name: 'E xona', capacity: 6 });
+  check('delete an unused room', (await call('DELETE', `/admin/rooms/${eRoom.body.id}`, admin)).status === 204);
+  check('deleting it again -> 404', (await call('DELETE', `/admin/rooms/${eRoom.body.id}`, admin)).status === 404);
+  const busyRoom = await call('DELETE', `/admin/rooms/${newRoom.body.id}`, admin);
+  check('a room used by an active group cannot be deleted (409)', busyRoom.status === 409 && String(busyRoom.body.error.message).includes('Python'), busyRoom.body);
+  // groups: edit
+  const edited = await call('PUT', `/admin/groups/${ng.body.id}`, admin, { name: 'Python (yangilandi)', course: 'Python 3' });
+  check('edit group name and course', edited.status === 200 && edited.body.name === 'Python (yangilandi)' && edited.body.course === 'Python 3', edited.body);
+  check('partial schedule (days only) -> 422', (await call('PUT', `/admin/groups/${ng.body.id}`, admin, { days: ['TUE'] })).status === 422);
+  check('move to a busy room slot -> 409', (await call('PUT', `/admin/groups/${ng.body.id}`, admin, { days: ['MON'], start: '18:00', roomId: aRoom.id })).status === 409);
+  const moved = await call('PUT', `/admin/groups/${ng.body.id}`, admin, { days: ['TUE', 'THU'], start: '10:00', roomId: newRoom.body.id });
+  check('move the group to a free slot', moved.status === 200 && moved.body.schedule.length === 2 && moved.body.schedule[0].start === '10:00', moved.body);
+  check('its old slot is free again', (await call('GET', '/admin/rooms/timetable?day=MON', admin)).body.rooms.find((r: any) => r.id === newRoom.body.id).cells['18:00'] === null);
+  // teachers: edit and remove
+  check('edit teacher name', (await call('PUT', `/admin/teachers/${nt.body.id}`, admin, { fullName: 'Bobur Aliyevich' })).status === 204);
+  check('bad phone on edit -> 422', (await call('PUT', `/admin/teachers/${nt.body.id}`, admin, { phone: '123' })).status === 422);
+  check('the name changed in the list', (await call('GET', '/admin/teachers', admin)).body.some((t: any) => t.id === nt.body.id && t.fullName === 'Bobur Aliyevich'));
+  const tBusy = await call('DELETE', `/admin/teachers/${nt.body.id}`, admin);
+  check('a teacher with a group cannot be removed (409)', tBusy.status === 409 && String(tBusy.body.error.message).includes('Python'), tBusy.body);
+  check('teacher clash when changing the group teacher -> 409', (await call('PUT', `/admin/groups/${ng.body.id}`, admin, { teacherId: t1Id, days: ['TUE'], start: '18:00', roomId: newRoom.body.id })).status === 409);
+  check('hand the group to another teacher', (await call('PUT', `/admin/groups/${ng.body.id}`, admin, { teacherId: t1Id })).body.teacher.id === t1Id);
+  check('now the teacher can be removed', (await call('DELETE', `/admin/teachers/${nt.body.id}`, admin)).status === 204);
+  check('the removed teacher cannot sign in', (await call('POST', '/auth/login', undefined, { login: 'bobur.aliyev', password: 'yangiustoz9' })).status === 401);
+  check('and is gone from the list', !(await call('GET', '/admin/teachers', admin)).body.some((t: any) => t.id === nt.body.id));
+  // groups: delete (empty) and archive (with lessons)
+  const empty = await call('POST', '/admin/groups', admin, { name: 'Bo\'sh guruh', course: 'Sinov kursi', teacherId: t1Id, days: ['FRI'], start: '08:00', roomId: newRoom.body.id, amount: 100000, dueDate: g.dueDate });
+  check('delete a group that never had lessons -> deleted', (await call('DELETE', `/admin/groups/${empty.body.id}`, admin)).body.result === 'deleted');
+  const withLessons = await call('POST', '/admin/groups', admin, { name: 'Arxivlanadigan', course: 'Sinov kursi', teacherId: t1Id, days: ['FRI'], start: '12:00', roomId: newRoom.body.id, amount: 100000, dueDate: g.dueDate });
+  check('teacher starts a lesson in it', (await call('POST', '/teacher/lessons', teacher, { groupId: withLessons.body.id, title: 'Arxiv uchun dars' })).status === 201);
+  check('delete a group that has lessons -> archived (data kept)', (await call('DELETE', `/admin/groups/${withLessons.body.id}`, admin)).body.result === 'archived');
+  check('archived group is gone from the admin list', !(await call('GET', '/admin/groups', admin)).body.some((x: any) => x.id === withLessons.body.id));
+  check('archived group is closed for its teacher (404)', (await call('GET', `/teacher/groups/${withLessons.body.id}/lessons`, teacher)).status === 404);
+  const again = await call('POST', '/admin/groups', admin, { name: 'Yangi', course: 'Sinov kursi', teacherId: t1Id, days: ['FRI'], start: '12:00', roomId: newRoom.body.id, amount: 100000, dueDate: g.dueDate });
+  check('its room slot was freed (a new group fits)', again.status === 201, again.body);
+  await call('DELETE', `/admin/groups/${again.body.id}`, admin);
+  // students: edit, leave a group, remove
+  check('edit student name', (await call('PUT', `/admin/students/${ns.body.id}`, admin, { fullName: 'Aziza Karimova Rustamovna' })).status === 204);
+  check('take the student out of a group', (await call('DELETE', `/admin/students/${ns.body.id}/groups/${gr2.id}`, admin)).status === 204);
+  check('...twice -> 404', (await call('DELETE', `/admin/students/${ns.body.id}/groups/${gr2.id}`, admin)).status === 404);
+  const before11 = (await call('GET', `/teacher/groups/${tgr1.id}/students`, teacher)).body.length;
+  check('remove the student', (await call('DELETE', `/admin/students/${ns.body.id}`, admin)).status === 204);
+  check('the removed student cannot sign in', (await call('POST', '/auth/login', undefined, { login: 'aziza.karimova', password: 'boshqa5678' })).status === 401);
+  check('their seat in the group is free', (await call('GET', `/teacher/groups/${tgr1.id}/students`, teacher)).body.length === before11 - 1, before11);
+  check('and they are gone from the students list', !(await call('GET', '/admin/students', admin)).body.some((x: any) => x.id === ns.body.id));
+  // administrators
+  const admin2 = await call('POST', '/admin/admins', admin, { fullName: 'Ikkinchi Admin', phone: '+998 90 555 66 77', login: 'admin.ikki', password: 'Admin2Pass99' });
+  check('add a new administrator', admin2.status === 201 && admin2.body.login === 'admin.ikki', admin2.body);
+  check('duplicate admin login -> 422', (await call('POST', '/admin/admins', admin, { fullName: 'Uchinchi Admin', login: 'ADMIN.IKKI', password: 'Admin2Pass99' })).status === 422);
+  const a2 = await login('admin.ikki', 'Admin2Pass99');
+  check('the new administrator signs in and manages', !!a2 && (await call('GET', '/admin/dashboard', a2)).status === 200 && (await call('GET', '/me', a2)).body.role === 'ADMIN');
+  check('both administrators are listed', (await call('GET', '/admin/admins', admin)).body.length >= 2);
+  const adminId = (await call('GET', '/me', admin)).body.id;
+  check('an administrator cannot delete themselves (409)', (await call('DELETE', `/admin/admins/${adminId}`, admin)).status === 409);
+  check('edit the new administrator', (await call('PUT', `/admin/admins/${admin2.body.id}`, admin, { fullName: 'Ikkinchi Admin Aliyev' })).status === 204);
+  check('change their password: their session ends', (await call('PUT', `/admin/admins/${admin2.body.id}/account`, admin, { password: 'Admin3Pass00' })).status === 204 && (await call('GET', '/me', a2)).status === 401);
+  const a2b = await login('admin.ikki', 'Admin3Pass00');
+  check('a teacher cannot manage administrators (403)', (await call('POST', '/admin/admins', teacher, { fullName: 'Yomon Odam', login: 'yomon.odam', password: 'Admin2Pass99' })).status === 403);
+  check('remove the new administrator', (await call('DELETE', `/admin/admins/${admin2.body.id}`, admin)).status === 204);
+  check('their token is dead and they cannot sign in', (await call('GET', '/me', a2b)).status === 401 && (await call('POST', '/auth/login', undefined, { login: 'admin.ikki', password: 'Admin3Pass00' })).status === 401);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

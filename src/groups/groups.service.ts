@@ -5,7 +5,7 @@ import { dateStr, dayOf, endTime } from '../common/dates';
 import { Day, Role } from '../common/enums';
 import { conflict, unprocessable } from '../common/errors';
 import { RULES } from '../config/rules';
-import { Activity, Group, GroupMember, GroupSchedule, Homework, Lesson, PaymentPlan, Room, StudentHomework, User } from '../entities';
+import { Activity, Group, GroupMember, GroupSchedule, Homework, Lesson, PaymentNotice, PaymentPlan, Room, StudentHomework, User } from '../entities';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RoomsService } from '../rooms/rooms.service';
 
@@ -55,11 +55,14 @@ export class GroupsService {
   /** A teacher may only work with the groups they teach (403 otherwise). */
   async assertTeaches(teacherId: number, groupId: number) {
     const g = await this.byId(groupId);
+    if (!g.isActive) throw new NotFoundException('Guruh arxivlangan.');
     if (g.teacherId !== teacherId) throw new ForbiddenException("Bu guruh sizniki emas.");
     return g;
   }
 
   async assertMember(studentId: number, groupId: number) {
+    const g = await this.groups.findOneBy({ id: groupId });
+    if (g && !g.isActive) throw new NotFoundException('Guruh arxivlangan.');
     if (!(await this.members.findOneBy({ groupId, studentId }))) throw new ForbiddenException("Siz bu guruhda emassiz.");
   }
 
@@ -165,15 +168,15 @@ export class GroupsService {
   // ---------- opening a group ----------
 
   /** 409 when the room is busy or the teacher already teaches another group at that time. */
-  async assertSlotFree(input: { days: Day[]; start: string; roomId: number | null; teacherId: number }) {
+  async assertSlotFree(input: { days: Day[]; start: string; roomId: number | null; teacherId: number }, exceptGroupId?: number) {
     const [occ, rooms, allGroups, schedules] = await Promise.all([this.occupancy(), this.roomsSvc.all(), this.allGroups(), this.schedule.find()]);
     if (input.roomId !== null) {
       for (const d of input.days) {
         const other = occ.get(key(input.roomId, d, input.start));
-        if (other) throw conflict(`${rooms.find((r) => r.id === input.roomId)?.name} ${d} kuni ${input.start} da band: ${other.name}.`);
+        if (other && other.id !== exceptGroupId) throw conflict(`${rooms.find((r) => r.id === input.roomId)?.name} ${d} kuni ${input.start} da band: ${other.name}.`);
       }
     }
-    const mine = new Set(allGroups.filter((g) => g.teacherId === input.teacherId).map((g) => g.id));
+    const mine = new Set(allGroups.filter((g) => g.teacherId === input.teacherId && g.id !== exceptGroupId).map((g) => g.id));
     for (const s of schedules) {
       if (mine.has(s.groupId) && input.days.includes(s.day as Day) && s.startTime === input.start) {
         const g = allGroups.find((x) => x.id === s.groupId)!;
@@ -200,6 +203,69 @@ export class GroupsService {
       return g.id;
     });
     return (await this.describe([await this.byId(id)]))[0]!;
+  }
+
+  /**
+   * Edits a group. name / course / teacher can change on their own; the schedule (days + start + room) is replaced as a whole
+   * and is checked like a new group (room busy or teacher clash -> 409), ignoring this group's own current slots.
+   */
+  async updateGroup(id: number, input: { name?: string; course?: string; teacherId?: number; days?: Day[]; start?: string; roomId?: number }) {
+    const g = await this.byId(id);
+    if (!g.isActive) throw new NotFoundException('Guruh arxivlangan.');
+    const teacherId = input.teacherId ?? g.teacherId;
+    if (input.teacherId !== undefined && !(await this.users.findOneBy({ id: input.teacherId, role: Role.TEACHER, isActive: true }))) throw unprocessable('Ustoz topilmadi.', 'teacherId');
+    const reschedule = input.days !== undefined || input.start !== undefined || input.roomId !== undefined;
+    if (reschedule) {
+      if (!input.days?.length || !input.start || input.roomId === undefined) throw unprocessable("Jadvalni o'zgartirish uchun kunlar, vaqt va xonani birga yuboring.", 'days');
+      if (!RULES.LESSON_SLOTS.includes(input.start as never)) throw unprocessable("Dars vaqti 2 soatlik kataklardan biri bo'lsin.", 'start');
+      if (!(await this.rooms.findOneBy({ id: input.roomId }))) throw unprocessable('Xona topilmadi.', 'roomId');
+    } else if (input.teacherId !== undefined && input.teacherId !== g.teacherId) {
+      // only the teacher changes: the current schedule must still be free for the new teacher
+      const cur = await this.schedule.findBy({ groupId: id });
+      for (const s of cur) await this.assertSlotFree({ days: [s.day as Day], start: s.startTime, roomId: null, teacherId }, id);
+    }
+    if (reschedule) await this.assertSlotFree({ days: [...new Set(input.days!)], start: input.start!, roomId: input.roomId!, teacherId }, id);
+    await this.ds.transaction(async (em) => {
+      if (input.name !== undefined) g.name = input.name.trim();
+      if (input.course !== undefined) g.course = input.course.trim();
+      g.teacherId = teacherId;
+      await em.save(Group, g);
+      if (reschedule) {
+        await em.delete(GroupSchedule, { groupId: id });
+        for (const day of [...new Set(input.days!)]) await em.save(GroupSchedule, em.create(GroupSchedule, { groupId: id, day, startTime: input.start!, endTime: endTime(input.start!), roomId: input.roomId! }));
+      }
+    });
+    return (await this.describe([await this.byId(id)]))[0]!;
+  }
+
+  /**
+   * Deletes a group. A group that never had lessons is removed completely; one that has lessons (students' marks, homework,
+   * history) is ARCHIVED instead: it disappears for everybody, its room and teacher slots become free, the data stays.
+   */
+  async removeGroup(id: number) {
+    const g = await this.byId(id);
+    const hasLessons = (await this.ds.manager.count(Lesson, { where: { groupId: id } })) > 0;
+    if (hasLessons) {
+      g.isActive = false;
+      await this.groups.save(g);
+      // let go of the room slots (the unique (room, day, time) index would otherwise block a new group there)
+      await this.schedule.update({ groupId: id }, { roomId: null });
+      return { result: 'archived' as const };
+    }
+    await this.ds.transaction(async (em) => {
+      await em.delete(GroupMember, { groupId: id });
+      await em.delete(GroupSchedule, { groupId: id });
+      await em.delete(PaymentPlan, { groupId: id });
+      await em.delete(PaymentNotice, { groupId: id });
+      await em.delete(Group, { id });
+    });
+    return { result: 'deleted' as const };
+  }
+
+  /** Takes a student out of a group (frees the seat). Their marks stay in the lessons' history. */
+  async unenrol(studentId: number, groupId: number) {
+    const r = await this.members.delete({ groupId, studentId });
+    if (!r.affected) throw new NotFoundException("O'quvchi bu guruhda emas.");
   }
 
   // ---------- members ----------
