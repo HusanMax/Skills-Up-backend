@@ -72,6 +72,24 @@ export class Invoice {
   @CreateDateColumn() createdAt: Date;
 }
 
+/**
+ * "I paid" message of a student: they paid by card outside the system and write the amount. It counts as money only
+ * after the administrator approves it (then a Payment is created).
+ */
+@Entity('payment_claims')
+export class PaymentClaim {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column({ type: Number }) invoiceId: number;
+  @Index() @Column({ type: Number }) studentId: number;
+  @Column({ type: Number }) amount: number;
+  @Column({ type: String }) method: string;
+  @Index() @Column({ type: String }) status: string; // PENDING | APPROVED | REJECTED
+  @Column({ type: String, nullable: true }) rejectReason: string | null;
+  @Column({ type: Number, nullable: true }) decidedById: number | null;
+  @Column({ type: Date, nullable: true }) decidedAt: Date | null;
+  @CreateDateColumn() createdAt: Date;
+}
+
 @Entity('payments')
 export class Payment {
   @PrimaryGeneratedColumn() id: number;

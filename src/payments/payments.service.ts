@@ -5,7 +5,7 @@ import { NotFoundException } from '@nestjs/common';
 import { dateStr } from '../common/dates';
 import { conflict, unprocessable } from '../common/errors';
 import { RULES } from '../config/rules';
-import { Group, GroupMember, Invoice, Payment, PaymentNotice, PaymentPlan } from '../entities';
+import { Group, GroupMember, Invoice, Payment, PaymentClaim, PaymentNotice, PaymentPlan, User } from '../entities';
 import { ReportsService } from './reports.service';
 import { GroupsService } from '../groups/groups.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -25,6 +25,7 @@ export class PaymentsService {
     private notifications: NotificationsService,
     private reports: ReportsService,
     @InjectRepository(Invoice) private invoices: Repository<Invoice>,
+    @InjectRepository(PaymentClaim) private claims: Repository<PaymentClaim>,
     @InjectRepository(Payment) private payments: Repository<Payment>,
     @InjectRepository(PaymentPlan) private plans: Repository<PaymentPlan>,
     @InjectRepository(PaymentNotice) private notices: Repository<PaymentNotice>,
@@ -70,7 +71,13 @@ export class PaymentsService {
     const allGroups = await this.groups.findBy({ id: In([...new Set(rows.map((r) => r.groupId))].concat(groupIds)) });
     const gname = (id: number) => nameOf(id) || allGroups.find((g) => g.id === id)?.name || '';
     const last = rows[0];
+    const myInvoices = await this.reports.rows({ studentId });
+    const myClaims = await this.claims.find({ where: { studentId }, order: { id: 'DESC' }, take: 50 });
+    const pending = new Map(myClaims.filter((c) => c.status === 'PENDING').map((c) => [c.invoiceId, c]));
     return {
+      // only what the administrator has billed: the student pays against these and nothing else
+      invoices: myInvoices.filter((i) => i.debt > 0).map((i) => ({ ...i, pendingClaim: pending.get(i.id) ? { id: pending.get(i.id)!.id, amount: pending.get(i.id)!.amount } : null })),
+      claims: myClaims.map((c) => ({ id: c.id, invoiceId: c.invoiceId, amount: c.amount, method: c.method, status: c.status, rejectReason: c.rejectReason, createdAt: c.createdAt.toISOString(), decidedAt: c.decidedAt?.toISOString() ?? null })),
       total: rows.reduce((s, r) => s + r.amount, 0),
       count: rows.length,
       last: last ? { paidAt: last.paidAt, groupName: gname(last.groupId), amount: last.amount } : null,
@@ -101,7 +108,13 @@ export class PaymentsService {
     if (!studentIds.length) throw unprocessable("Guruhda o'quvchi yo'q.", 'groupId');
     const existing = new Set((await this.invoices.findBy({ groupId: group.id, period })).map((i) => i.studentId));
     const fresh = studentIds.filter((id) => !existing.has(id));
-    if (fresh.length) await this.invoices.insert(fresh.map((studentId) => ({ studentId, groupId: group.id, period, issuedAt, dueDate: input.dueDate, amount })));
+    if (fresh.length) {
+      await this.ds.transaction(async (em) => {
+        await em.insert(Invoice, fresh.map((studentId) => ({ studentId, groupId: group.id, period, issuedAt, dueDate: input.dueDate, amount })));
+        // sending the bill is what opens the payment for the student, so they are told right away
+        await em.insert('notifications', fresh.map((userId) => ({ userId, type: 'payment_notice', link: '/payments', readAt: null, title: `To'lov: ${group.name}, ${som(amount)}, ${uzDay(input.dueDate)} gacha` })));
+      });
+    }
     return { group: group.name, period, amount, created: fresh.length, skipped: studentIds.length - fresh.length };
   }
 
@@ -121,6 +134,62 @@ export class PaymentsService {
       await em.save(Payment, em.create(Payment, { invoiceId, studentId: invoice.studentId, groupId: invoice.groupId, amount: input.amount, paidAt, method: input.method, description: input.description?.trim() || "Standart to'lov" }));
     });
     return (await this.reports.rows({ studentId: invoice.studentId, groupId: invoice.groupId })).find((r) => r.id === invoiceId);
+  }
+
+  /** The student says "I paid <amount>". Only for their own, still unpaid invoices; one open message per invoice. */
+  async submitClaim(studentId: number, invoiceId: number, input: { amount: number; method?: string }) {
+    const row = (await this.reports.rows({ studentId })).find((r) => r.id === invoiceId);
+    if (!row) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Hisob topilmadi.' });
+    if (row.debt <= 0) throw conflict("Bu hisob to'liq to'langan.");
+    if (!Number.isInteger(input.amount) || input.amount < 1) throw unprocessable("Summa musbat butun son bo'lsin.", 'amount');
+    if (input.amount > row.debt) throw unprocessable(`Qolgan qarz ${som(row.debt)}: undan ko'p yozib bo'lmaydi.`, 'amount');
+    if (await this.claims.findOneBy({ invoiceId, status: 'PENDING' })) throw conflict("Oldingi to'lov xabaringiz hali tekshirilmoqda.");
+    const claim = await this.claims.save(this.claims.create({ invoiceId, studentId, amount: input.amount, method: input.method?.trim() || 'Karta', status: 'PENDING' }));
+    return { id: claim.id, status: claim.status, amount: claim.amount };
+  }
+
+  /** Admin list of student messages (default: those waiting for approval). */
+  async listClaims(status = 'PENDING') {
+    if (!['PENDING', 'APPROVED', 'REJECTED'].includes(status)) throw unprocessable("Holat PENDING, APPROVED yoki REJECTED bo'lsin.", 'status');
+    const list = await this.claims.find({ where: { status }, order: { id: status === 'PENDING' ? 'ASC' : 'DESC' }, take: 200 });
+    const rows = new Map((await this.reports.rows({})).map((r) => [r.id, r]));
+    return list.map((c) => {
+      const r = rows.get(c.invoiceId);
+      return { id: c.id, invoiceId: c.invoiceId, studentId: c.studentId, studentName: r?.studentName ?? '', groupName: r?.groupName ?? '', period: r?.period ?? '', amount: c.amount, method: c.method, status: c.status, debt: r?.debt ?? 0, rejectReason: c.rejectReason, createdAt: c.createdAt.toISOString() };
+    });
+  }
+
+  private async decide(claimId: number) {
+    const claim = await this.claims.findOneBy({ id: claimId });
+    if (!claim) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Xabar topilmadi.' });
+    if (claim.status !== 'PENDING') throw conflict('Bu xabar allaqachon ko\'rib chiqilgan.');
+    return claim;
+  }
+
+  /** Approve: the money becomes a real Payment, in one transaction with the paid-sum check. The student is told. */
+  async approveClaim(adminId: number, claimId: number) {
+    const claim = await this.decide(claimId);
+    const invoice = await this.invoices.findOneBy({ id: claim.invoiceId });
+    if (!invoice) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Hisob topilmadi.' });
+    await this.ds.transaction(async (em) => {
+      const { paid } = (await em.createQueryBuilder(Payment, 'p').select('COALESCE(SUM(p.amount), 0)', 'paid').where('p.invoiceId = :id', { id: invoice.id }).getRawOne<{ paid: number | string }>())!;
+      const left = invoice.amount - Number(paid);
+      if (claim.amount > left) throw conflict(`Qolgan qarz ${som(Math.max(left, 0))}: xabardagi summa undan ko'p. Rad eting.`);
+      await em.save(Payment, em.create(Payment, { invoiceId: invoice.id, studentId: invoice.studentId, groupId: invoice.groupId, amount: claim.amount, paidAt: dateStr(new Date()), method: claim.method, description: "O'quvchi xabari, admin tasdiqladi" }));
+      await em.update(PaymentClaim, claim.id, { status: 'APPROVED', decidedById: adminId, decidedAt: new Date() });
+      await em.insert('notifications', [{ userId: claim.studentId, type: 'payment_approved', link: '/payments', readAt: null, title: `To'lovingiz tasdiqlandi: ${som(claim.amount)}` }]);
+    });
+    return { id: claim.id, status: 'APPROVED' };
+  }
+
+  async rejectClaim(adminId: number, claimId: number, reason?: string) {
+    const claim = await this.decide(claimId);
+    const why = reason?.trim() || null;
+    await this.ds.transaction(async (em) => {
+      await em.update(PaymentClaim, claim.id, { status: 'REJECTED', rejectReason: why, decidedById: adminId, decidedAt: new Date() });
+      await em.insert('notifications', [{ userId: claim.studentId, type: 'payment_rejected', link: '/payments', readAt: null, title: `To'lov xabaringiz rad etildi: ${som(claim.amount)}${why ? ` (${why})` : ''}` }]);
+    });
+    return { id: claim.id, status: 'REJECTED' };
   }
 
   /** Admin payments page: every group with its plan, plus the history of sent notices. */

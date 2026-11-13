@@ -707,6 +707,16 @@ GET   /admin/groups/:id       -> { ...guruh, teacher:{id,fullName}, students:[{i
 GET   /admin/rooms/:id        -> { id, name, capacity, weeklySlots, groups:[{id,name,teacher,members,slots}] }
       (POST /admin/payments olib tashlandi: to'lov endi hisobga bog'lanadi.)
 
+--- To'lov xabarlari (saytda to'lov tizimi yo'q: o'quvchi kartadan o'zi to'laydi, summani yozadi, admin tasdiqlaydi) ---
+payment_claims jadvali: invoiceId, studentId, amount, method, status PENDING|APPROVED|REJECTED, rejectReason, decidedById, decidedAt
+GET   /student/payments       -> endi invoices (faqat admin yuborgan, qarzi bor hisoblar + pendingClaim), claims, items, total...
+POST  /student/invoices/:id/claims { amount, method? } -> { id, status:'PENDING', amount }   (faqat o'z hisobi; qarzdan ko'p bo'lmasin;
+                              bitta hisobga bitta ochiq xabar; pul tasdiqlanmaguncha HISOBLANMAYDI)
+GET   /admin/claims?status=PENDING|APPROVED|REJECTED
+POST  /admin/claims/:id/approve   -> haqiqiy Payment yaratiladi (tranzaksiya, qolgan qarz qayta tekshiriladi), o'quvchiga bildirishnoma
+POST  /admin/claims/:id/reject    { reason? } -> o'quvchi sababni ko'radi
+POST /admin/invoices endi hisob yaratilganda guruh o'quvchilariga bildirishnoma ham yuboradi (to'lov shundan keyin ochiladi).
+
 Eski to'lovlar (invoiceId yo'q) server ishga tushganda avtomatik hisobga ko'chiriladi: har bir o'quvchi/guruh/oy uchun bitta hisob,
 summasi to'langan summaga teng (PAID).
 ```

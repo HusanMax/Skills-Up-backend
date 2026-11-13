@@ -469,6 +469,44 @@ async function main() {
   check('detail: a student id on the teacher route -> 404', (await call('GET', `/admin/teachers/${gd.body.students[0].id}`, admin)).status === 404);
   check('detail: teacher/student cannot open admin details (403)', (await call('GET', `/admin/students/${gd.body.students[0].id}`, teacher)).status === 403 && (await call('GET', `/admin/groups/${gd.body.id}`, student)).status === 403);
 
+
+  console.log('9. student "I paid" messages -> admin approves');
+  const me2 = await login('bekzod.rahimov', 'Yangi2345a');
+  const mine = (await call('GET', '/student/payments', me2)).body;
+  check('student sees only billed, unpaid invoices', mine.invoices.length > 0 && mine.invoices.every((i: any) => i.debt > 0 && i.studentName === 'Bekzod Rahimov'), mine.invoices.length);
+  const inv0 = mine.invoices[0];
+  const other = (await call('GET', '/student/payments', await login('zilola.hasanova', 'Yangi99887a'))).body.invoices[0];
+  check("a student cannot claim someone else's invoice (404)", other && (await call('POST', `/student/invoices/${other.id}/claims`, me2, { amount: 1000 })).status === 404);
+  check('claim above the debt -> 422', (await call('POST', `/student/invoices/${inv0.id}/claims`, me2, { amount: inv0.debt + 1 })).status === 422);
+  check('claim of 0 -> 422', (await call('POST', `/student/invoices/${inv0.id}/claims`, me2, { amount: 0 })).status === 422);
+  check('admin cannot use the student route (403)', (await call('POST', `/student/invoices/${inv0.id}/claims`, admin, { amount: 1000 })).status === 403);
+  const paidBefore = (await call('GET', '/admin/reports/payments', admin)).body.summary.paid;
+  const cl = await call('POST', `/student/invoices/${inv0.id}/claims`, me2, { amount: 100000, method: 'Uzcard' });
+  check('"I paid 100 000" is accepted as PENDING', cl.status === 201 && cl.body.status === 'PENDING', cl.body);
+  check('a second open message for the same invoice -> 409', (await call('POST', `/student/invoices/${inv0.id}/claims`, me2, { amount: 1000 })).status === 409);
+  check('money is NOT counted before approval', (await call('GET', '/admin/reports/payments', admin)).body.summary.paid === paidBefore);
+  const pend = (await call('GET', '/admin/claims', admin)).body;
+  check('admin sees it waiting', pend.some((c: any) => c.id === cl.body.id && c.studentName === 'Bekzod Rahimov' && c.amount === 100000));
+  check('teacher/student cannot see or approve (403)', (await call('GET', '/admin/claims', me2)).status === 403 && (await call('POST', `/admin/claims/${cl.body.id}/approve`, me2)).status === 403);
+  const ap = await call('POST', `/admin/claims/${cl.body.id}/approve`, admin);
+  check('approve -> APPROVED', ap.status === 201 && ap.body.status === 'APPROVED', ap.body);
+  check('now the money is counted (+100 000)', (await call('GET', '/admin/reports/payments', admin)).body.summary.paid === paidBefore + 100000);
+  check('approving twice -> 409', (await call('POST', `/admin/claims/${cl.body.id}/approve`, admin)).status === 409);
+  check('student got a notification', (await call('GET', '/notifications', me2)).body.some((n: any) => n.type === 'payment_approved'));
+  const after = (await call('GET', '/student/payments', me2)).body;
+  check('student: debt fell by 100 000, claim shown APPROVED', after.invoices.find((i: any) => i.id === inv0.id).debt === inv0.debt - 100000 && after.claims[0].status === 'APPROVED');
+  const cl2 = await call('POST', `/student/invoices/${inv0.id}/claims`, me2, { amount: 50000 });
+  const rj = await call('POST', `/admin/claims/${cl2.body.id}/reject`, admin, { reason: "Pul tushmadi" });
+  check('reject -> REJECTED, nothing counted', rj.body.status === 'REJECTED' && (await call('GET', '/admin/reports/payments', admin)).body.summary.paid === paidBefore + 100000);
+  check('student sees the reason', (await call('GET', '/student/payments', me2)).body.claims[0].rejectReason === 'Pul tushmadi' && (await call('GET', '/notifications', me2)).body.some((n: any) => n.type === 'payment_rejected'));
+  check('after a rejection the student can write again', (await call('POST', `/student/invoices/${inv0.id}/claims`, me2, { amount: 1000 })).status === 201);
+  const stale = (await call('GET', '/admin/claims', admin)).body.find((c: any) => c.amount === 1000);
+  await call('POST', `/admin/invoices/${inv0.id}/payments`, admin, { amount: (await call('GET', '/student/payments', me2)).body.invoices.find((i: any) => i.id === inv0.id).debt, method: 'Naqd pul' });
+  check('debt paid in another way before approval -> approve refuses (409)', (await call('POST', `/admin/claims/${stale.id}/approve`, admin)).status === 409);
+  check('a fully paid invoice accepts no more messages (404 listed / 409)', [404, 409].includes((await call('POST', `/student/invoices/${inv0.id}/claims`, me2, { amount: 1000 })).status));
+  check('bills notify the students', (await call('POST', '/admin/invoices', admin, { groupId: groupsList[0].id, period: '2024-05', dueDate: '2024-05-20', issuedAt: '2024-05-10', amount: 200000 })).body.created > 0);
+  check('claims list filter by status', (await call('GET', '/admin/claims?status=APPROVED', admin)).body.length >= 1 && (await call('GET', '/admin/claims?status=NOPE', admin)).status === 422);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

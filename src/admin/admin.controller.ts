@@ -76,6 +76,9 @@ class InvoiceDto {
   @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) issuedAt?: string;
   @Matches(/^\d{4}-\d{2}-\d{2}$/) dueDate: string;
 }
+class RejectDto {
+  @IsOptional() @IsString() reason?: string;
+}
 class InvoicePaymentDto {
   @IsInt() @Min(1) amount: number;
   @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) paidAt?: string;
@@ -171,6 +174,11 @@ export class AdminController {
   /** Bills every student of a group for a period (students already billed are skipped). */
   @Post('invoices') createInvoices(@Body() dto: InvoiceDto) { return this.payments.createInvoices(dto); }
   @Post('invoices/:id/payments') addPayment(@Param('id', ParseIntPipe) id: number, @Body() dto: InvoicePaymentDto) { return this.payments.addPayment(id, dto); }
+
+  // students' "I paid" messages
+  @Get('claims') claims(@Query('status') status?: string) { return this.payments.listClaims(status); }
+  @Post('claims/:id/approve') approve(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number) { return this.payments.approveClaim(u.id, id); }
+  @Post('claims/:id/reject') reject(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: RejectDto) { return this.payments.rejectClaim(u.id, id, dto.reason); }
 
   // "open one" pages
   @Get('teachers/:id') teacher(@Param('id', ParseIntPipe) id: number) { return this.details.teacher(id); }

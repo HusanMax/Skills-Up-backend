@@ -12,6 +12,11 @@ class ProgressDto {
   @IsInt({ message: 'Progress butun son bo\'lsin.' }) @Min(0) @Max(100) percent: number;
 }
 
+class ClaimDto {
+  @IsInt() @Min(1) amount: number;
+  @IsOptional() @IsString() @MaxLength(40) method?: string;
+}
+
 class SubmitDto {
   @IsOptional() @IsString() @MaxLength(2000, { message: 'Javob matni 2000 belgidan oshmasin.' }) text?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(3, { message: "Ko'pi bilan 3 ta fayl biriktirish mumkin." }) @IsInt({ each: true }) fileIds?: number[];
@@ -47,6 +52,9 @@ export class StudentController {
   leaderboard(@CurrentUser() u: AuthUser, @Param('groupId', ParseIntPipe) groupId: number) { return this.student.leaderboard(u.id, groupId); }
 
   @Get('payments') paymentsList(@CurrentUser() u: AuthUser) { return this.payments.forStudent(u.id); }
+  /** "I paid": counts only after the administrator approves. */
+  @Post('invoices/:id/claims')
+  claim(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: ClaimDto) { return this.payments.submitClaim(u.id, id, dto); }
   @Get('analytics') analytics(@CurrentUser() u: AuthUser) { return this.student.analytics(u.id); }
   @Get('calendar') calendar(@CurrentUser() u: AuthUser, @Query('month') month = '') { return this.student.calendar(u.id, month); }
 }
