@@ -458,6 +458,10 @@ async function main() {
   check('teacher detail: every group with schedule, students, lessons', td.status === 200 && td.body.groups.length >= 2 && td.body.groups.every((g: any) => g.schedule.length > 0 && typeof g.members === 'number') && td.body.totals.groups >= 2 && td.body.totals.students > 0 && td.body.totals.weeklySessions >= 4, td.body.totals);
   const gd = await call('GET', `/admin/groups/${td.body.groups[0].id}`, admin);
   check('group detail: teacher link, students with money, totals', gd.status === 200 && gd.body.teacher.id === t1.id && gd.body.students.length === gd.body.members && gd.body.students.every((s: any) => s.totalSales === s.paid + s.debt) && gd.body.totals.totalSales === gd.body.students.reduce((t: number, s: any) => t + s.totalSales, 0), gd.body.totals);
+  const firstStudent = gd.body.students[0];
+  check('group detail: every student has full info (login, joined, level/XP, attendance, homework, exams, money, other groups)', gd.body.students.every((x: any) => x.login && x.joinedAt && x.level >= 1 && x.xp >= 0 && x.rank >= 1 && x.attendance.lessons === gd.body.lessonsHeld && x.attendance.percent >= 0 && x.attendance.percent <= 100 && x.homework.given >= x.homework.done && Array.isArray(x.otherGroups) && Array.isArray(x.bills) && x.totalSales === x.paid + x.debt), firstStudent);
+  check('group detail: a student of two groups lists the other one', gd.body.students.some((x: any) => x.otherGroups.length > 0));
+  check('group detail: ranks are 1..n without repeats', new Set(gd.body.students.map((x: any) => x.rank)).size === gd.body.students.length);
   const sd = await call('GET', `/admin/students/${gd.body.students[0].id}`, admin);
   check('student detail: groups, invoices, payments, totals', sd.status === 200 && sd.body.groups.length >= 1 && sd.body.invoices.length > 0 && sd.body.totals.totalSales === sd.body.totals.paid + sd.body.totals.debt && sd.body.payments.reduce((t: number, p: any) => t + p.amount, 0) === sd.body.totals.paid, sd.body.totals);
   const manyToMany = (await call('GET', '/admin/students', admin)).body.find((s: any) => s.groups.length >= 2);

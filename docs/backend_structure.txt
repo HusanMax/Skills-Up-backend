@@ -703,7 +703,11 @@ GET   /admin/reports/payments/export?(xuddi shu filtrlar)   -> HAQIQIY .xlsx (Co
 --- "Bitta yozuvni ochish" sahifalari (bog'langan yozuvlar id + nom bilan; one-to-many va many-to-many uchun) ---
 GET   /admin/teachers/:id     -> { ...shaxs, groups:[guruh+jadval+o'quvchilar+darslar], totals:{ groups, archivedGroups, students, weeklySessions, lessons } }
 GET   /admin/students/:id     -> { ...shaxs, groups:[guruh+ustoz+jadval], invoices:[hisob qatorlari], payments:[...], totals:{summary} }
-GET   /admin/groups/:id       -> { ...guruh, teacher:{id,fullName}, students:[{id,fullName,phone,...summary}], totals, recentInvoices }
+GET   /admin/groups/:id       -> { ...guruh, teacher:{id,fullName}, lessonsHeld, totals, recentInvoices,
+                                students:[{ id, fullName, phone, login, isActive, createdAt, joinedAt, otherGroups:[{id,name}],
+                                            xp, gems, level, rank, attendance:{attended,lessons,percent},
+                                            homework:{given,done,pending,returned,notDone,averageGrade}, exams:{count,averageBall},
+                                            bills:[hisob qatorlari], ...summary (jami/to'langan/qarz/holatlar soni) }] }
 GET   /admin/rooms/:id        -> { id, name, capacity, weeklySlots, groups:[{id,name,teacher,members,slots}] }
       (POST /admin/payments olib tashlandi: to'lov endi hisobga bog'lanadi.)
 

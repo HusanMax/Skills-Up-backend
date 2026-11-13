@@ -6,6 +6,8 @@ import { iso } from '../common/dates';
 import { Group, GroupMember, Lesson, Payment, Room, User } from '../entities';
 import { GroupsService } from '../groups/groups.service';
 import { ReportsService } from '../payments/reports.service';
+import { levelFor, RewardsService } from '../rewards/rewards.service';
+import { HwStatus } from '../common/enums';
 
 const notFound = (what: string) => new NotFoundException({ code: 'NOT_FOUND', message: `${what} topilmadi.` });
 
@@ -18,6 +20,7 @@ export class DetailsService {
   constructor(
     private groupsSvc: GroupsService,
     private reports: ReportsService,
+    private rewards: RewardsService,
     @InjectRepository(User) private users: Repository<User>,
     @InjectRepository(Group) private groups: Repository<Group>,
     @InjectRepository(GroupMember) private members: Repository<GroupMember>,
@@ -75,10 +78,37 @@ export class DetailsService {
     const links = await this.members.findBy({ groupId: id });
     const students = links.length ? await this.users.find({ where: { id: In(links.map((l) => l.studentId)) }, order: { fullName: 'ASC' } }) : [];
     const invoices = await this.reports.rows({ groupId: id });
+    // everything about each student in THIS group: study results, homework, money and their other groups
+    const data = await this.rewards.loadGroup(g);
+    const ranking = await this.rewards.ranking(data);
+    const everyLink = students.length ? await this.members.findBy({ studentId: In(students.map((s) => s.id)) }) : [];
+    const otherIds = [...new Set(everyLink.filter((l) => l.groupId !== id).map((l) => l.groupId))];
+    const otherNames = new Map((otherIds.length ? await this.groups.findBy({ id: In(otherIds) }) : []).map((o) => [o.id, o.name]));
+    const held = data.lessons.filter((l) => l.startsAt.getTime() <= Date.now());
+    const studentRows = students.map((s) => {
+      const t = this.rewards.totalsIn(data, s.id);
+      const attended = held.filter((l) => this.rewards.attended(data, l.id, s.id)).length;
+      const sh = data.lessons.map((l) => this.rewards.shOf(data, l.id, s.id)).filter((x) => !!x);
+      const grades = sh.map((x) => x!.grade).filter((x): x is number => x !== null);
+      const balls = data.lessons.map((l) => data.exam.get(`${l.id}:${s.id}`)).filter((x): x is number => x !== undefined);
+      const mine = invoices.filter((i) => i.studentId === s.id);
+      return {
+        id: s.id, fullName: s.fullName, phone: s.phone, login: s.login, isActive: s.isActive, createdAt: iso(s.createdAt),
+        joinedAt: iso(everyLink.find((l) => l.studentId === s.id && l.groupId === id)?.joinedAt),
+        otherGroups: everyLink.filter((l) => l.studentId === s.id && l.groupId !== id).map((l) => ({ id: l.groupId, name: otherNames.get(l.groupId) ?? '' })),
+        xp: t.xp, gems: t.gems, level: levelFor(t.xp).level, rank: ranking.find((r) => r.studentId === s.id)?.rank ?? null,
+        attendance: { attended, lessons: held.length, percent: held.length ? Math.round((attended / held.length) * 100) : 0 },
+        homework: { given: sh.length, done: sh.filter((x) => x!.status === HwStatus.DONE).length, pending: sh.filter((x) => x!.status === HwStatus.PENDING).length, returned: sh.filter((x) => x!.status === HwStatus.RETURNED).length, notDone: sh.filter((x) => x!.status === HwStatus.NOT_DONE).length, averageGrade: grades.length ? Math.round((grades.reduce((a, b) => a + b, 0) / grades.length) * 10) / 10 : null },
+        exams: { count: balls.length, averageBall: balls.length ? Math.round(balls.reduce((a, b) => a + b, 0) / balls.length) : null },
+        bills: mine,
+        ...this.reports.summarize(mine),
+      };
+    });
     return {
       ...row,
       teacher: { id: g.teacherId, fullName: row!.teacher.fullName },
-      students: students.map((s) => ({ id: s.id, fullName: s.fullName, phone: s.phone, isActive: s.isActive, ...this.reports.summarize(invoices.filter((i) => i.studentId === s.id)) })),
+      lessonsHeld: held.length,
+      students: studentRows,
       totals: this.reports.summarize(invoices),
       recentInvoices: invoices.slice(0, 20),
     };
