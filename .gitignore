@@ -1,0 +1,10 @@
+node_modules
+dist
+*.tsbuildinfo
+
+# local secrets, local database and uploaded files
+.env
+.env.*
+!.env.example
+data/
+uploads/
