@@ -355,8 +355,7 @@ calendar_events (ixtiyoriy: darslar, imtihonlar, vazifa muddatlari, suhbatlar ma
 ### 6.1 Konfiguratsiya qiymatlari
 
 ```
-ATTENDANCE_XP        = 20     darsga qatnashish uchun XP (hamma darsda bir xil)
-ATTENDANCE_GEMS      = 10     darsga qatnashish uchun kumush
+ATTENDANCE_BALL      = 10     darsga qatnashish 10 ball turadi; ball o'zi XP va kumushga aylanadi (1 ball = 1 XP, 2 ball = 1 kumush => 10 XP + 5 kumush)
 MIN_BALL / MAX_BALL  = 1 / 100   vazifa va imtihon bali (butun son)
 XP_PER_BALL          = 1      1 ball = 1 XP
 BALL_PER_GEM         = 2      har 2 ball = 1 kumush (yaxlitlash: Math.round(ball / 2))
@@ -383,7 +382,7 @@ DEFAULT_ONLINE_CAPACITY = 15
 - "Hammasi qatnashdi" tugmasi: hali qatnashmagan hammani present = true qiladi.
 - "Davomatni saqlash": lessons.attendance_saved = true. Shu paytda hisoblangan natija HAR BIR o'quvchi uchun attendance jadvaliga aniq (explicit) yozilsin (video asosida hisoblanganlar ham). Saqlangandan keyin davomatni tahrirlash endpointlari 409 qaytaradi ("Davomat saqlangan").
 - "Davomatni tahrirlash": attendance_saved = false (faqat ustoz). Jurnalda saqlangan darslar qulf belgisi bilan ko'rinadi, katak o'zgarmaydi.
-- Qatnashish uchun mukofot: har doim ATTENDANCE_XP va ATTENDANCE_GEMS.
+- Qatnashish uchun mukofot: har doim ATTENDANCE_BALL (10 ball = 10 XP + 5 kumush).
 
 ### 6.4 Uyga vazifa
 
@@ -932,7 +931,7 @@ Ko'p jadvalga yoziladigan amallar (guruh ochish, to'lov eslatmasi, davomatni saq
 
 ### 15.6 Boshqa NestJS tavsiyalari
 
-- Konfiguratsiya: @nestjs/config; konstantalar (ATTENDANCE_XP, LATE_PENALTY va h.k.) bitta config faylida (6.1-bo'lim).
+- Konfiguratsiya: @nestjs/config; konstantalar (ATTENDANCE_BALL, LATE_PENALTY va h.k.) bitta config faylida (6.1-bo'lim).
 - Fayl yuklash: @nestjs/platform-express (Multer) + o'z FileValidationPipe (8-bo'limdagi jadval). Videoni StreamableFile bilan Range so'rovlarini qo'llab-quvvatlab bering.
 - Login himoyasi: @nestjs/throttler (login endpointiga qattiq limit).
 - Hujjatlash: @nestjs/swagger, shu hujjatdagi endpointlar bilan bir xil.

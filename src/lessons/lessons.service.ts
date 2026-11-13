@@ -96,7 +96,7 @@ export class LessonsService {
     );
     if (completedNow) {
       const l = await this.byId(lessonId);
-      await this.activities.save(this.activities.create({ studentId, type: 'lesson', text: `“${l.title}” darsini tugatdingiz`, xp: RULES.ATTENDANCE_XP }));
+      await this.activities.save(this.activities.create({ studentId, type: 'lesson', text: `“${l.title}” darsini tugatdingiz`, xp: Math.round(RULES.ATTENDANCE_BALL * RULES.XP_PER_BALL) }));
     }
     return { progress: value, completed: value >= 100 };
   }

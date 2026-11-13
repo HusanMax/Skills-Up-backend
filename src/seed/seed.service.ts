@@ -247,7 +247,7 @@ export class SeedService implements OnApplicationBootstrap {
       { title: 'Texnik suhbatga tayyorgarlik', topic: 'Suhbat', durationMin: 31, description: 'Suhbatda tez-tez beriladigan savollar va javoblar.', videoUrl: null },
     ]);
     await em.insert(Guide, [
-      { title: "XP ni qanday tezroq yig'ish mumkin", category: 'Boshlash', readMin: 4, summary: "Davomat va vazifa ballari XP va kumushga qanday aylanishini bilib oling.", body: "Darsga qatnashsangiz (videoni oxirigacha ko'rsangiz) har safar bir xil XP va kumush olasiz. Vazifa 1 dan 100 gacha baholanadi: 1 ball = 1 XP, har 2 ball = 1 kumush. Muddatdan keyin topshirilsa, ball 10 taga kamayadi." },
+      { title: "XP ni qanday tezroq yig'ish mumkin", category: 'Boshlash', readMin: 4, summary: "Davomat va vazifa ballari XP va kumushga qanday aylanishini bilib oling.", body: "Darsga qatnashsangiz (videoni oxirigacha ko'rsangiz) har safar 10 ball olasiz: bu 10 XP va 5 kumush. Vazifa 1 dan 100 gacha baholanadi: 1 ball = 1 XP, har 2 ball = 1 kumush. Muddatdan keyin topshirilsa, ball 10 taga kamayadi." },
       { title: "Texnik suhbatga tayyorgarlik", category: 'Karyera', readMin: 8, summary: "Ishonch bilan mashq qilish uchun oddiy haftalik reja.", body: "Asoslarni takrorlang, kuniga bitta kichik masala yeching va fikringizni ovoz chiqarib tushuntiring." },
     ]);
     await em.insert(Faq, [

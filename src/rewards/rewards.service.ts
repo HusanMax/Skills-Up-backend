@@ -111,8 +111,9 @@ export class RewardsService {
     const raw = sh && sh.status === HwStatus.DONE && sh.grade !== null ? sh.grade : null;
     const late = !!(hw && d.late.get(k(hw.id, studentId)));
     const ball = raw === null ? null : late ? Math.max(RULES.MIN_BALL, raw - RULES.LATE_PENALTY) : raw;
-    const attendanceXp = attended ? RULES.ATTENDANCE_XP : 0;
-    const attendanceGems = attended ? RULES.ATTENDANCE_GEMS : 0;
+    // the 10 balls of attendance are converted like every other ball: 1 ball = 1 XP, 2 balls = 1 kumush
+    const attendanceXp = attended ? ballToXp(RULES.ATTENDANCE_BALL) : 0;
+    const attendanceGems = attended ? ballToGems(RULES.ATTENDANCE_BALL) : 0;
     const ballXp = ball === null ? 0 : ballToXp(ball);
     const ballGems = ball === null ? 0 : ballToGems(ball);
     return {

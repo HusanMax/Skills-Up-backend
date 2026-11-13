@@ -3,8 +3,7 @@
  * Keep every rule number here, never inline them in services.
  */
 export const RULES = {
-  ATTENDANCE_XP: 20, // XP for attending a lesson (same for every lesson)
-  ATTENDANCE_GEMS: 10, // kumush for attending a lesson
+  ATTENDANCE_BALL: 10, // attending a lesson is worth 10 balls; they become XP and kumush with the same rates as any ball
   MIN_BALL: 1,
   MAX_BALL: 100,
   XP_PER_BALL: 1, // 1 ball = 1 XP

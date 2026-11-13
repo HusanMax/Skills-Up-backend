@@ -54,6 +54,11 @@ async function main() {
   console.log('2. student panel');
   const dash = (await call('GET', '/student/dashboard', student)).body;
   check('dashboard has xp, level, 2 group ranks', typeof dash.xp === 'number' && dash.xp > 0 && dash.level >= 1 && dash.groupRanks.length === 2, dash);
+  const lessonsOfG1 = (await call('GET', '/student/groups/1/lessons', student)).body.lessons;
+  const doneL = lessonsOfG1.find((l: any) => l.homework.ball !== null);
+  const rewardL = (await call('GET', `/student/lessons/${doneL.id}`, student)).body.reward;
+  check('attending a lesson = 10 balls -> 10 XP + 5 kumush', rewardL.attended && rewardL.attendanceXp === 10 && rewardL.attendanceGems === 5, rewardL);
+  check('lesson total = attendance + homework ball converted', rewardL.xp === 10 + rewardL.ballXp && rewardL.gems === 5 + Math.round(rewardL.ball / 2) && rewardL.ballXp === rewardL.ball, rewardL);
   const groups = (await call('GET', '/student/groups', student)).body;
   check('student has 2 groups with schedule', groups.length === 2 && groups.every((g: any) => g.schedule.length > 0), groups.length);
   const gr1 = groups.find((g: any) => g.name === 'Fullstack dasturlash');
