@@ -98,6 +98,7 @@ async function main() {
     const after = (await call('GET', `/student/lessons/${target.id}`, student)).body;
     check('status is now pending', after.homework.status === 'pending' && after.homework.submission.text === 'Bajardim', after.homework);
     check('student can open own file', (await fetch(`${API}/files/${upBody.id}`, { headers: { Authorization: `Bearer ${student}` } })).status === 200);
+    check('a file opens with ?token= (for <video>/<img>), but other routes do not accept it', (await fetch(`${API}/files/${upBody.id}?token=${student}`)).status === 200 && (await fetch(`${API}/student/dashboard?token=${student}`)).status === 401 && (await fetch(`${API}/files/${upBody.id}?token=nonsense`)).status === 401);
     check('teacher can open it too', (await fetch(`${API}/files/${upBody.id}`, { headers: { Authorization: `Bearer ${teacher}` } })).status === 200);
   }
 
