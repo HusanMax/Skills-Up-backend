@@ -11,8 +11,18 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1');
   // the bare address of the server (https://host/) opens the API docs instead of a 404
   app.getHttpAdapter().get('/', (_req: unknown, res: { redirect: (url: string) => void }) => res.redirect('/api/docs'));
-  // CORS_ORIGIN: the frontend addresses, comma separated. Spaces and a trailing "/" are forgiven.
-  const origins = (process.env.CORS_ORIGIN ?? 'http://localhost:3000').split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean);
+  // CORS_ORIGIN: the frontend addresses, comma separated. Spaces, a trailing "/" and a path such as "/login" are forgiven.
+  const origins = (process.env.CORS_ORIGIN ?? 'http://localhost:3000')
+    .split(',')
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean)
+    .map((o) => {
+      try {
+        return new URL(o).origin; // "https://site.vercel.app/login" -> "https://site.vercel.app" (a browser only sends the origin)
+      } catch {
+        return o;
+      }
+    });
   app.enableCors({ origin: origins, credentials: true });
   app.useGlobalPipes(appValidationPipe());
   app.useGlobalFilters(new AllExceptionsFilter());
