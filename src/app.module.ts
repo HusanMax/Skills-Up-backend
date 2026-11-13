@@ -8,6 +8,7 @@ import { AuthModule } from './auth/auth.module';
 import { RolesGuard, SessionAuthGuard } from './common/guards';
 import { databaseOptions } from './config/database';
 import { CoreModule } from './core.module';
+import { HealthController } from './health.controller';
 import { SeedService } from './seed/seed.service';
 import { StudentModule } from './student/student.module';
 import { TeacherModule } from './teacher/teacher.module';
@@ -24,6 +25,7 @@ import { TeacherModule } from './teacher/teacher.module';
     TeacherModule,
     AdminModule,
   ],
+  controllers: [HealthController],
   providers: [
     SeedService,
     // order matters: rate limit -> session token (401) -> role (403)
