@@ -544,6 +544,21 @@ async function main() {
   check('the uploaded answer file is gone from the database', [403, 404].includes((await fetch(`${API}/files/${upBody.id}`, { headers: { Authorization: `Bearer ${student}` } })).status));
   if (filesBefore >= 0) check('...and from the disk', (await import('fs')).readdirSync(process.env.UPLOAD_DIR!).length < filesBefore, filesBefore);
 
+
+  console.log('11. admin manages career videos, guides and FAQ');
+  const cv = await call('POST', '/admin/content/career-videos', admin, { title: 'Yangi video', topic: 'Rezyume', durationMin: 12, description: 'Tavsif', url: 'https://youtu.be/jNQXAC9IVRw' });
+  check('add a career video', cv.status === 201 && cv.body.url === 'https://youtu.be/jNQXAC9IVRw', cv.body);
+  check('students see it', (await call('GET', '/career-videos', student)).body.some((v: any) => v.id === cv.body.id));
+  check('bad video link / duration -> 422', (await call('POST', '/admin/content/career-videos', admin, { title: 'Yomon', topic: 'X1', durationMin: 5, description: '', url: 'ftp://x' })).status === 422 && (await call('POST', '/admin/content/career-videos', admin, { title: 'Yomon', topic: 'X1', durationMin: 0, description: '' })).status === 422);
+  check('edit a career video (link can be cleared)', (await call('PUT', `/admin/content/career-videos/${cv.body.id}`, admin, { title: 'Yangi video 2', topic: 'Rezyume', durationMin: 15, description: 'Tavsif' })).body.url === null);
+  const gd2 = await call('POST', '/admin/content/guides', admin, { title: "Yangi qo'llanma", category: 'Boshlash', readMin: 3, summary: 'Qisqa mazmun', body: "Bu qo'llanmaning to'liq matni." });
+  check('add a guide', gd2.status === 201 && (await call('GET', '/guides', student)).body.some((g: any) => g.id === gd2.body.id));
+  check('edit + delete a guide', (await call('PUT', `/admin/content/guides/${gd2.body.id}`, admin, { title: "O'zgargan", category: 'Boshlash', readMin: 4, summary: 'Qisqa mazmun', body: "Bu qo'llanmaning to'liq matni." })).body.title === "O'zgargan" && (await call('DELETE', `/admin/content/guides/${gd2.body.id}`, admin)).status === 204 && !(await call('GET', '/guides', student)).body.some((g: any) => g.id === gd2.body.id));
+  const fq = await call('POST', '/admin/content/faqs', admin, { question: "Savol qanday bo'ladi?", answer: 'Javob shunday.' });
+  check('add + edit + delete a FAQ', fq.status === 201 && (await call('PUT', `/admin/content/faqs/${fq.body.id}`, admin, { question: "Savol o'zgardi?", answer: 'Javob.' })).body.question === "Savol o'zgardi?" && (await call('DELETE', `/admin/content/faqs/${fq.body.id}`, admin)).status === 204);
+  check('delete unknown -> 404; twice -> 404', (await call('DELETE', '/admin/content/faqs/99999', admin)).status === 404 && (await call('DELETE', `/admin/content/career-videos/${cv.body.id}`, admin)).status === 204 && (await call('DELETE', `/admin/content/career-videos/${cv.body.id}`, admin)).status === 404);
+  check('students and teachers cannot edit content (403)', (await call('POST', '/admin/content/faqs', student, { question: "Savol qanday?", answer: 'Javob' })).status === 403 && (await call('DELETE', '/admin/content/guides/1', teacher)).status === 403 && (await call('POST', '/admin/content/faqs', undefined, { question: 'Savol qanday?', answer: 'Javob' })).status === 401);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

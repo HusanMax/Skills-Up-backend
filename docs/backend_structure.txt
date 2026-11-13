@@ -704,6 +704,11 @@ GET   /admin/reports/payments/export?(xuddi shu filtrlar)   -> HAQIQIY .xlsx (Co
       Varaqlar: Summary (filtrlar, ko'rsatkichlar, oldingi davr bilan o'sish), Payments (BARCHA mos hisoblar, sahifalashsiz, JAMI qatori),
       Transactions (har bir to'lov). Kutubxona: exceljs.
 
+--- Kontent (faqat ADMIN; o'qish hamma uchun: GET /career-videos, /guides, /faqs) ---
+POST|PUT /admin/content/career-videos[/:id]  { title, topic, durationMin, description, url? (http/https, YouTube ham)}  DELETE /:id -> 204
+POST|PUT /admin/content/guides[/:id]         { title, category, readMin, summary, body }                              DELETE /:id -> 204
+POST|PUT /admin/content/faqs[/:id]           { question, answer }                                                     DELETE /:id -> 204
+
 --- "Bitta yozuvni ochish" sahifalari (bog'langan yozuvlar id + nom bilan; one-to-many va many-to-many uchun) ---
 GET   /admin/teachers/:id     -> { ...shaxs, groups:[guruh+jadval+o'quvchilar+darslar], totals:{ groups, archivedGroups, students, weeklySessions, lessons } }
 GET   /admin/students/:id     -> { ...shaxs, groups:[guruh+ustoz+jadval], invoices:[hisob qatorlari], payments:[...], totals:{summary} }
