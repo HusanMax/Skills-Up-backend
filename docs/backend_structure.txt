@@ -672,7 +672,11 @@ GET   /admin/rooms/free       ?days=MON,WED&start=18:00   -> [ roomId, ... ]   (
 GET   /admin/groups           -> [ { id,name,course,teacher,members,capacity,schedule:[{day,start,end,roomId,roomName}],plan:{amount,dueDate} } ]
 POST  /admin/groups           { name, course, teacherId, days:['MON','WED'], start:'18:00', roomId, amount, dueDate }   -> group
 PUT   /admin/groups/:id       { name?, course?, teacherId?, days?, start?, roomId? }  -> group  (jadval: kunlar+vaqt+xona birga; band bo'lsa 409)
-DELETE /admin/groups/:id      dars o'tilmagan bo'lsa o'chadi, o'tilgan bo'lsa ARXIVLANADI ({ result: 'deleted' | 'archived' })
+DELETE /admin/groups/:id      tugagan guruhni BUTUNLAY o'chiradi (bitta tranzaksiya): darslar, davomat, video progress, imtihon ballari,
+                              uyga vazifa va barcha javoblar, yuklangan fayllar (bazadan ham, R2/diskdan ham), hisoblar, to'lovlar,
+                              to'lov xabarlari, jadval, o'rinlar. XP/kumush darslardan hisoblangani uchun guruhdagi XP ham yo'qoladi
+                              (boshqa guruhlardagisi qoladi). O'quvchi/ustoz hisoblari o'chmaydi.
+                              -> { result:'deleted', removed:{ lessons, students, invoices, payments, files } }
          tekshiruvlar: 6.7 (xona bandligi, ustoz to'qnashuvi, amount >= 10000, dueDate >= bugun)
 
 # To'lovlar

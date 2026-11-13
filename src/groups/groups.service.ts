@@ -5,7 +5,8 @@ import { dateStr, dayOf, endTime } from '../common/dates';
 import { Day, Role } from '../common/enums';
 import { conflict, unprocessable } from '../common/errors';
 import { RULES } from '../config/rules';
-import { Activity, Group, GroupMember, GroupSchedule, Homework, Lesson, PaymentNotice, PaymentPlan, Room, StudentHomework, User } from '../entities';
+import { Activity, Attendance, ExamResult, Group, GroupMember, GroupSchedule, Homework, HomeworkAttachment, Invoice, Lesson, LessonProgress, Payment, PaymentClaim, PaymentNotice, PaymentPlan, Room, StoredFile, StudentHomework, Submission, SubmissionFile, User } from '../entities';
+import { FilesService } from '../files/files.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RoomsService } from '../rooms/rooms.service';
 
@@ -28,6 +29,7 @@ export class GroupsService {
     private ds: DataSource,
     private roomsSvc: RoomsService,
     private notifications: NotificationsService,
+    private filesSvc: FilesService,
     @InjectRepository(Group) private groups: Repository<Group>,
     @InjectRepository(GroupSchedule) private schedule: Repository<GroupSchedule>,
     @InjectRepository(GroupMember) private members: Repository<GroupMember>,
@@ -239,27 +241,59 @@ export class GroupsService {
   }
 
   /**
-   * Deletes a group. A group that never had lessons is removed completely; one that has lessons (students' marks, homework,
-   * history) is ARCHIVED instead: it disappears for everybody, its room and teacher slots become free, the data stays.
+   * Deletes a FINISHED group for good, together with everything that belongs to it: lessons, attendance, video progress,
+   * exam balls, homework with every hand-in, the uploaded files, the bills and payments, the schedule and the seats.
+   * Because XP and kumush are worked out from lessons, attendance, homework and exams, the students' XP earned in this
+   * group disappears with it (XP from their other groups stays). The students' accounts are NOT touched.
+   * It is one transaction: either everything goes or nothing does.
    */
   async removeGroup(id: number) {
-    const g = await this.byId(id);
-    const hasLessons = (await this.ds.manager.count(Lesson, { where: { groupId: id } })) > 0;
-    if (hasLessons) {
-      g.isActive = false;
-      await this.groups.save(g);
-      // let go of the room slots (the unique (room, day, time) index would otherwise block a new group there)
-      await this.schedule.update({ groupId: id }, { roomId: null });
-      return { result: 'archived' as const };
-    }
+    await this.byId(id);
+    const chunks = <T>(list: T[], n = 400) => Array.from({ length: Math.ceil(list.length / n) }, (_, i) => list.slice(i * n, (i + 1) * n));
+    const ids = async <T extends object>(em: import('typeorm').EntityManager, entity: new () => T, where: object, col: string) => (await em.find(entity as never, { where } as never) as Record<string, number>[]).map((r) => r[col]!);
+    const removedFiles: StoredFile[] = [];
+    const counts = { lessons: 0, students: 0, invoices: 0, payments: 0, files: 0 };
     await this.ds.transaction(async (em) => {
-      await em.delete(GroupMember, { groupId: id });
+      const lessons = await em.find(Lesson, { where: { groupId: id } });
+      const lessonIds = lessons.map((l) => l.id);
+      const homeworkIds = lessonIds.length ? await ids(em, Homework, { lessonId: In(lessonIds) }, 'id') : [];
+      const submissionIds: number[] = [];
+      for (const c of chunks(homeworkIds)) submissionIds.push(...(await ids(em, Submission, { homeworkId: In(c) }, 'id')));
+      const fileIds = new Set<number>(lessons.map((l) => l.videoFileId).filter((x): x is number => x !== null));
+      for (const c of chunks(homeworkIds)) (await em.findBy(HomeworkAttachment, { homeworkId: In(c) })).forEach((x) => fileIds.add(x.fileId));
+      for (const c of chunks(submissionIds)) (await em.findBy(SubmissionFile, { submissionId: In(c) })).forEach((x) => fileIds.add(x.fileId));
+
+      for (const c of chunks(submissionIds)) await em.delete(SubmissionFile, { submissionId: In(c) });
+      for (const c of chunks(submissionIds)) await em.delete(Submission, { id: In(c) });
+      for (const c of chunks(homeworkIds)) {
+        await em.delete(StudentHomework, { homeworkId: In(c) });
+        await em.delete(HomeworkAttachment, { homeworkId: In(c) });
+        await em.delete(Homework, { id: In(c) });
+      }
+      for (const c of chunks(lessonIds)) {
+        await em.delete(Attendance, { lessonId: In(c) });
+        await em.delete(LessonProgress, { lessonId: In(c) });
+        await em.delete(ExamResult, { lessonId: In(c) });
+        await em.delete(Lesson, { id: In(c) });
+      }
+      for (const c of chunks([...fileIds])) {
+        removedFiles.push(...(await em.findBy(StoredFile, { id: In(c) })));
+        await em.delete(StoredFile, { id: In(c) });
+      }
+      const invoiceIds = await ids(em, Invoice, { groupId: id }, 'id');
+      for (const c of chunks(invoiceIds)) await em.delete(PaymentClaim, { invoiceId: In(c) });
+      counts.payments = (await em.delete(Payment, { groupId: id })).affected ?? 0;
+      counts.invoices = (await em.delete(Invoice, { groupId: id })).affected ?? 0;
+      counts.students = (await em.delete(GroupMember, { groupId: id })).affected ?? 0;
       await em.delete(GroupSchedule, { groupId: id });
       await em.delete(PaymentPlan, { groupId: id });
       await em.delete(PaymentNotice, { groupId: id });
       await em.delete(Group, { id });
+      counts.lessons = lessonIds.length;
+      counts.files = removedFiles.length;
     });
-    return { result: 'deleted' as const };
+    await this.filesSvc.purgeBytes(removedFiles); // after the commit: the data is gone for sure, now the bytes
+    return { result: 'deleted' as const, removed: counts };
   }
 
   /** Takes a student out of a group (frees the seat). Their marks stay in the lessons' history. */

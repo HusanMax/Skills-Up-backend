@@ -66,6 +66,18 @@ export class FilesService {
     return f;
   }
 
+  /** Deletes files for good: the database rows first (inside the caller's transaction when `em` is given), then the bytes. */
+  async purgeBytes(rows: StoredFile[]) {
+    for (const f of rows) {
+      try {
+        if (f.storage === 'r2') await this.storage.remove(f.storageKey);
+        else await fs.promises.rm(this.pathOf(f), { force: true });
+      } catch {
+        /* a missing or unreachable file must not stop the cleanup */
+      }
+    }
+  }
+
   pathOf(f: StoredFile) {
     return path.join(this.dir, f.storageKey);
   }

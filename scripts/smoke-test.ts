@@ -304,9 +304,10 @@ async function main() {
   check('delete a group that never had lessons -> deleted', (await call('DELETE', `/admin/groups/${empty.body.id}`, admin)).body.result === 'deleted');
   const withLessons = await call('POST', '/admin/groups', admin, { name: 'Arxivlanadigan', course: 'Sinov kursi', teacherId: t1Id, days: ['FRI'], start: '12:00', roomId: newRoom.body.id, amount: 100000, dueDate: g.dueDate });
   check('teacher starts a lesson in it', (await call('POST', '/teacher/lessons', teacher, { groupId: withLessons.body.id, title: 'Arxiv uchun dars' })).status === 201);
-  check('delete a group that has lessons -> archived (data kept)', (await call('DELETE', `/admin/groups/${withLessons.body.id}`, admin)).body.result === 'archived');
-  check('archived group is gone from the admin list', !(await call('GET', '/admin/groups', admin)).body.some((x: any) => x.id === withLessons.body.id));
-  check('archived group is closed for its teacher (404)', (await call('GET', `/teacher/groups/${withLessons.body.id}/lessons`, teacher)).status === 404);
+  const delWith = await call('DELETE', `/admin/groups/${withLessons.body.id}`, admin);
+  check('delete a group that has lessons -> deleted for good with its lessons', delWith.body.result === 'deleted' && delWith.body.removed.lessons === 1, delWith.body);
+  check('deleted group is gone from the admin list', !(await call('GET', '/admin/groups', admin)).body.some((x: any) => x.id === withLessons.body.id));
+  check('deleted group is gone for its teacher (404)', (await call('GET', `/teacher/groups/${withLessons.body.id}/lessons`, teacher)).status === 404);
   const again = await call('POST', '/admin/groups', admin, { name: 'Yangi', course: 'Sinov kursi', teacherId: t1Id, days: ['FRI'], start: '12:00', roomId: newRoom.body.id, amount: 100000, dueDate: g.dueDate });
   check('its room slot was freed (a new group fits)', again.status === 201, again.body);
   await call('DELETE', `/admin/groups/${again.body.id}`, admin);
@@ -510,6 +511,37 @@ async function main() {
   check('a fully paid invoice accepts no more messages (404 listed / 409)', [404, 409].includes((await call('POST', `/student/invoices/${inv0.id}/claims`, me2, { amount: 1000 })).status));
   check('bills notify the students', (await call('POST', '/admin/invoices', admin, { groupId: groupsList[0].id, period: '2024-05', dueDate: '2024-05-20', issuedAt: '2024-05-10', amount: 200000 })).body.created > 0);
   check('claims list filter by status', (await call('GET', '/admin/claims?status=APPROVED', admin)).body.length >= 1 && (await call('GET', '/admin/claims?status=NOPE', admin)).status === 422);
+
+
+  console.log('10. deleting a finished group removes everything of it');
+  const allGroups10 = (await call('GET', '/admin/groups', admin)).body;
+  const doomed = allGroups10.find((x: any) => x.name === 'Backend asoslari');
+  const doomedDetail = (await call('GET', `/admin/groups/${doomed.id}`, admin)).body;
+  const shared = doomedDetail.students.find((x: any) => x.otherGroups.length > 0);
+  const otherGroupId = shared.otherGroups[0].id;
+  const xpElsewhereBefore = (await call('GET', `/admin/groups/${otherGroupId}`, admin)).body.students.find((x: any) => x.id === shared.id).xp;
+  const repBefore = (await rep()).body.summary;
+  const doomedSales = doomedDetail.totals.totalSales;
+  check('before: the group has lessons, students, bills', doomedDetail.lessonsHeld > 0 && doomedDetail.students.length > 3 && doomedSales > 0 && shared.xp > 0, { lessons: doomedDetail.lessonsHeld, n: doomedDetail.students.length });
+  check('teacher cannot delete a group (403)', (await call('DELETE', `/admin/groups/${doomed.id}`, teacher)).status === 403);
+  const purged = await call('DELETE', `/admin/groups/${doomed.id}`, admin);
+  check('delete -> everything of the group removed', purged.body.result === 'deleted' && purged.body.removed.lessons >= doomedDetail.lessonsHeld && purged.body.removed.students === doomedDetail.students.length && purged.body.removed.invoices > 0 && purged.body.removed.payments > 0, purged.body);
+  check('the group page is purged (404)', (await call('GET', `/admin/groups/${doomed.id}`, admin)).status === 404);
+  check('not in the groups list', !(await call('GET', '/admin/groups', admin)).body.some((x: any) => x.id === doomed.id));
+  const repAfter = (await rep()).body.summary;
+  check('its sales and payments left the report, the rest is intact', repAfter.totalSales === repBefore.totalSales - doomedSales && repAfter.totalSales === repAfter.paid + repAfter.debt, { repBefore, repAfter });
+  check('no sale of that group is left', (await rep(`?groupId=${doomed.id}`)).body.totalRows === 0);
+  check('students stay as accounts, only the group is purged from their pages', (await call('GET', `/admin/students/${shared.id}`, admin)).body.groups.every((x: any) => x.id !== doomed.id) && (await call('GET', `/admin/students/${shared.id}`, admin)).status === 200);
+  check('XP from their OTHER group is untouched', (await call('GET', `/admin/groups/${otherGroupId}`, admin)).body.students.find((x: any) => x.id === shared.id).xp === xpElsewhereBefore);
+  check('the teacher no longer sees it (404)', (await call('GET', `/teacher/groups/${doomed.id}/lessons`, teacher)).status === 404);
+  check('deleting twice -> 404', (await call('DELETE', `/admin/groups/${doomed.id}`, admin)).status === 404);
+
+  // the student's uploaded answer file lives in one of the remaining groups: deleting those removes the file too
+  const filesBefore = process.env.UPLOAD_DIR ? (await import('fs')).readdirSync(process.env.UPLOAD_DIR).length : -1;
+  for (const gg of (await call('GET', '/admin/groups', admin)).body) await call('DELETE', `/admin/groups/${gg.id}`, admin);
+  check('every group deleted -> the groups list is empty', (await call('GET', '/admin/groups', admin)).body.length === 0 && (await rep()).body.summary.totalSales === 0);
+  check('the uploaded answer file is gone from the database', [403, 404].includes((await fetch(`${API}/files/${upBody.id}`, { headers: { Authorization: `Bearer ${student}` } })).status));
+  if (filesBefore >= 0) check('...and from the disk', (await import('fs')).readdirSync(process.env.UPLOAD_DIR!).length < filesBefore, filesBefore);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
