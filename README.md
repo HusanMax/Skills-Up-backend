@@ -83,6 +83,7 @@ src/
   use the user id from the token. A teacher only touches the groups they teach.
 - **Sessions, not JWT:** logging in creates a random token; only its SHA-256 hash is stored (table `sessions`) with an expiry (`SESSION_HOURS`, default 12). The client sends `Authorization: Bearer <token>`. Logout, a password change or the expiry ends the session on the server at once. No `JWT_SECRET` is needed.
 - **Safety guard:** a remote `DATABASE_URL` (Neon...) is refused on a developer's computer unless `ALLOW_REMOTE_DB=true`; on Render it works as usual. Keep `DATABASE_URL` empty in your local `.env` so tests never touch real data.
+- **Admin account from the environment:** set `ADMIN_LOGIN` (default `admin`) and `ADMIN_PASSWORD` (at least 8 characters) in `.env` / on Render. On every start the backend makes the database match them: it creates the admin when missing, or replaces the password when it differs (that admin's sessions end). Login then just checks the typed password. The password never lives in the code. Leave `ADMIN_PASSWORD` empty to leave the admin alone.
 - **Login:** a wrong login or password always gives the same 401 message; login attempts are rate limited (`LOGIN_RATE_LIMIT`
   per minute). Passwords are stored as bcrypt hashes and never returned.
 - **Errors** always look like `{ "error": { "code", "message", "fields?" } }`.

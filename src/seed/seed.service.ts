@@ -8,6 +8,7 @@ import {
   Activity, Attendance, CareerVideo, Faq, Group, GroupMember, GroupSchedule, Guide, Homework, Lesson, LessonProgress, Payment, PaymentPlan, Room,
   StudentHomework, Submission, User, UserSettings,
 } from '../entities';
+import { SessionsService } from '../auth/sessions.service';
 import { UsersService } from '../users/users.service';
 
 /** Small deterministic hash: the same demo data every time the database is created. */
@@ -38,12 +39,35 @@ const LESSONS_GR3 = ['Node.js asoslari', 'Express va REST API', "SQL va ma'lumot
 @Injectable()
 export class SeedService implements OnApplicationBootstrap {
   private log = new Logger('Seed');
-  constructor(private ds: DataSource, private config: ConfigService, private users: UsersService) {}
+  constructor(private ds: DataSource, private config: ConfigService, private users: UsersService, private sessions: SessionsService) {}
 
   async onApplicationBootstrap() {
-    if (this.config.get('SEED_DEMO', 'true') === 'false') return;
-    if ((await this.ds.manager.count(User)) > 0) return;
-    await this.run();
+    if (this.config.get('SEED_DEMO', 'true') !== 'false' && (await this.ds.manager.count(User)) === 0) await this.run();
+    await this.syncAdminFromEnv();
+  }
+
+  /**
+   * The administrator's login and password live in the environment (ADMIN_LOGIN, ADMIN_PASSWORD), not in the code.
+   * On every start the backend makes the database match them: it creates the admin account when it is missing and
+   * replaces the password when it differs (then all sessions of that admin end). The login screen then simply checks
+   * the typed password against it. Without ADMIN_PASSWORD nothing is touched.
+   */
+  private async syncAdminFromEnv() {
+    const password = this.config.get<string>('ADMIN_PASSWORD');
+    if (!password) return;
+    const login = (this.config.get<string>('ADMIN_LOGIN') || 'admin').trim().toLowerCase();
+    if (password.length < 8) throw new Error("ADMIN_PASSWORD kamida 8 ta belgidan iborat bo'lsin.");
+    const existing = await this.users.findForLogin(login);
+    if (!existing) {
+      await this.users.create({ role: Role.ADMIN, login, password, fullName: 'Administrator' });
+      this.log.log(`Admin account "${login}" created from ADMIN_PASSWORD`);
+    } else if (existing.role !== Role.ADMIN) {
+      throw new Error(`ADMIN_LOGIN "${login}" boshqa rolga tegishli (${existing.role}). Boshqa login tanlang.`);
+    } else if (!this.users.verifyPassword(password, existing.passwordHash)) {
+      await this.ds.manager.update(User, existing.id, { passwordHash: this.users.hash(password), passwordChangedAt: new Date() });
+      await this.sessions.endAll(existing.id);
+      this.log.log(`Admin "${login}" password updated from ADMIN_PASSWORD (old sessions ended)`);
+    }
   }
 
   async run() {

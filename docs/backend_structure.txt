@@ -64,6 +64,7 @@ Login sahifasi: login + parol. Rol hisobga qarab aniqlanadi.
 - Login: 4-30 belgi, faqat kichik lotin harflari, raqam, nuqta, pastki chiziq, chiziq (a-z 0-9 . _ -). Butun tizimda UNIKAL (o'quvchi, ustoz, admin orasida).
 - Parol: kamida 8 belgi. O'z parolini o'zgartirishda kamida bitta harf va bitta raqam bo'lishi, eski paroldan farq qilishi kerak.
 - Parolni o'zgartirish (o'zi): POST /me/password { current, next } -> joriy parol noto'g'ri bo'lsa 422 "Joriy parol noto'g'ri."
+- Administrator hisobi muhit o'zgaruvchilaridan boshqariladi: ADMIN_LOGIN (standart: admin) va ADMIN_PASSWORD (kamida 8 belgi). Backend har ishga tushganda bazani shularga moslaydi: admin yo'q bo'lsa yaratadi, parol farq qilsa yangilaydi (shu adminning sessiyalari tugaydi). Parol kod ichida yozilmaydi. ADMIN_PASSWORD bo'sh bo'lsa, admin hisobiga tegilmaydi.
 - Admin boshqa odamning loginini/parolini o'zgartiradi (9.4-bo'lim, ADMIN).
 - Rol bo'yicha yo'naltirish va rol guard: 4.1 va 4.2 bo'limlar.
 - Hech qachon parol yoki xesh javobda qaytmasin.
