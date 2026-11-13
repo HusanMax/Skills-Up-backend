@@ -250,7 +250,7 @@ async function main() {
   check('a student of ANOTHER group did not get it', !(await call('GET', '/notifications', await login('zilola.hasanova', 'oquvchi123'))).body.some((n: any) => n.type === 'payment_notice'));
   check('notice shows in history', (await call('GET', '/admin/payments', admin)).body.notices[0].recipients === 11);
   check('the old record-payment route is gone (use invoices)', (await call('POST', '/admin/payments', admin, { studentId: meId, groupId: gr1.id, amount: 500000 })).status === 404);
-  check('notifications can be marked read', (await call('POST', '/notifications/read-all', student)).status === 204 && (await call('GET', '/notifications', student)).body.every((n: any) => n.readAt));
+  check('mark-all-read removes every notification for good', (await call('POST', '/notifications/read-all', student)).status === 204 && (await call('GET', '/notifications', student)).body.length === 0);
   check('settings read/write', (await call('PUT', '/me/settings', student, { theme: 'light' })).body.theme === 'light');
   check('invalid theme -> 422', (await call('PUT', '/me/settings', student, { theme: 'pink' })).status === 422);
   check('unknown field -> 422 (whitelist)', (await call('PUT', '/me/settings', student, { admin: true })).status === 422);
@@ -510,6 +510,10 @@ async function main() {
   const rj = await call('POST', `/admin/claims/${cl2.body.id}/reject`, admin, { reason: "Pul tushmadi" });
   check('reject -> REJECTED, nothing counted', rj.body.status === 'REJECTED' && (await call('GET', '/admin/reports/payments', admin)).body.summary.paid === paidBefore + 100000);
   check('student sees the reason', (await call('GET', '/student/payments', me2)).body.claims[0].rejectReason === 'Pul tushmadi' && (await call('GET', '/notifications', me2)).body.some((n: any) => n.type === 'payment_rejected'));
+  const myNotifs = (await call('GET', '/notifications', me2)).body;
+  const someoneElse = (await call('GET', '/notifications', await login('zilola.hasanova', 'Yangi99887a'))).body[0];
+  check('reading one notification deletes it', myNotifs.length >= 2 && (await call('DELETE', `/notifications/${myNotifs[0].id}`, me2)).status === 204 && !(await call('GET', '/notifications', me2)).body.some((n: any) => n.id === myNotifs[0].id));
+  check("another person's notification cannot be deleted (404) and deleting twice -> 404", (!someoneElse || (await call('DELETE', `/notifications/${someoneElse.id}`, me2)).status === 404) && (await call('DELETE', `/notifications/${myNotifs[0].id}`, me2)).status === 404);
   check('after a rejection the student can write again', (await call('POST', `/student/invoices/${inv0.id}/claims`, me2, { amount: 1000 })).status === 201);
   const stale = (await call('GET', '/admin/claims', admin)).body.find((c: any) => c.amount === 1000);
   await call('POST', `/admin/invoices/${inv0.id}/payments`, admin, { amount: (await call('GET', '/student/payments', me2)).body.invoices.find((i: any) => i.id === inv0.id).debt, method: 'Naqd pul' });

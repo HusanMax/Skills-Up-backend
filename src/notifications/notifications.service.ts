@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { Notification } from '../entities';
@@ -14,12 +14,19 @@ export class NotificationsService {
     await this.repo.insert(userIds.map((userId) => ({ userId, type: n.type, title: n.title, link: n.link ?? null, readAt: null })));
   }
 
-  async list(userId: number, unreadOnly = false) {
-    const rows = await this.repo.find({ where: { userId, ...(unreadOnly ? { readAt: IsNull() } : {}) }, order: { createdAt: 'DESC', id: 'DESC' }, take: 100 });
+  async list(userId: number) {
+    const rows = await this.repo.find({ where: { userId, readAt: IsNull() }, order: { createdAt: 'DESC', id: 'DESC' }, take: 100 });
     return rows.map((n) => ({ id: n.id, type: n.type, title: n.title, link: n.link, createdAt: iso(n.createdAt), readAt: iso(n.readAt) }));
   }
 
+  /** "Mark all as read" removes the person's notifications for good: a read notification is not kept. */
   async readAll(userId: number) {
-    await this.repo.update({ userId, readAt: IsNull() }, { readAt: new Date() });
+    await this.repo.delete({ userId });
+  }
+
+  /** Reading one notification removes it (only the owner's own). */
+  async remove(userId: number, id: number) {
+    const r = await this.repo.delete({ id, userId });
+    if (!r.affected) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Bildirishnoma topilmadi.' });
   }
 }

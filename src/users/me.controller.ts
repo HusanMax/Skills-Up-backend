@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { IsBoolean, IsIn, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 import { AuthUser, CurrentUser } from '../common/decorators';
@@ -50,6 +50,13 @@ export class MeController {
   @Get('notifications')
   list(@CurrentUser() user: AuthUser) {
     return this.notifications.list(user.id);
+  }
+
+  /** Reading one notification deletes it. */
+  @Delete('notifications/:id')
+  @HttpCode(204)
+  async readOne(@CurrentUser() user: AuthUser, @Param('id', ParseIntPipe) id: number) {
+    await this.notifications.remove(user.id, id);
   }
 
   @Post('notifications/read-all')

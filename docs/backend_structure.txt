@@ -558,7 +558,8 @@ POST   /me/password                { current, next }                        -> 2
 GET    /me/settings                                                         -> { notifyEmail, notifyPush, notifyReminders, theme }  [*]
 PUT    /me/settings                { notifyEmail?, notifyPush?, notifyReminders?, theme? }  -> settings   [*]
 GET    /notifications              ?unread=true                             -> [ { id, type, title, link, createdAt, readAt } ]   [*]
-POST   /notifications/read-all                                              -> 204                      [*]
+POST   /notifications/read-all                                              -> 204   hamma bildirishnoma BAZADAN O'CHADI (o'qilgan saqlanmaydi)   [*]
+DELETE /notifications/:id                                                   -> 204   bittasini o'qish = o'chirish (faqat o'zinikini; boshqaniki 404)   [*]
 POST   /files                      multipart file                           -> { id, name, size, mime } [*]
 GET    /files/:id                                                           -> fayl (yuklab olish)      [egasi yoki guruh a'zolari]
 ```
