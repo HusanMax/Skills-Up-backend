@@ -9,7 +9,9 @@ import { appValidationPipe } from './common/pipes/validation';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.setGlobalPrefix('api/v1');
-  app.enableCors({ origin: (process.env.CORS_ORIGIN ?? 'http://localhost:3000').split(','), credentials: true });
+  // CORS_ORIGIN: the frontend addresses, comma separated. Spaces and a trailing "/" are forgiven.
+  const origins = (process.env.CORS_ORIGIN ?? 'http://localhost:3000').split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean);
+  app.enableCors({ origin: origins, credentials: true });
   app.useGlobalPipes(appValidationPipe());
   app.useGlobalFilters(new AllExceptionsFilter());
 
