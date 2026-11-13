@@ -5,7 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AdminModule } from './admin/admin.module';
 import { AuthModule } from './auth/auth.module';
-import { JwtAuthGuard, RolesGuard } from './common/guards';
+import { RolesGuard, SessionAuthGuard } from './common/guards';
 import { databaseOptions } from './config/database';
 import { CoreModule } from './core.module';
 import { SeedService } from './seed/seed.service';
@@ -26,9 +26,9 @@ import { TeacherModule } from './teacher/teacher.module';
   ],
   providers: [
     SeedService,
-    // order matters: rate limit -> token (401) -> role (403)
+    // order matters: rate limit -> session token (401) -> role (403)
     { provide: APP_GUARD, useClass: ThrottlerGuard },
-    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: SessionAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
 })

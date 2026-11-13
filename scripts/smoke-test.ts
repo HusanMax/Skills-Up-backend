@@ -185,10 +185,12 @@ async function main() {
   check('enrol into another group', (await call('POST', `/admin/students/${ns.body.id}/enrol`, admin, { groupId: gr2.id })).status === 204);
   // accounts
   check('admin sets a new password', (await call('PUT', `/admin/students/${ns.body.id}/account`, admin, { password: 'boshqa5678' })).status === 204);
+  check('the student\'s old session token died with the password change (401)', (await call('GET', '/me', newStudent)).status === 401);
   check('old password stops working', (await call('POST', '/auth/login', undefined, { login: 'aziza.k', password: 'yangi1234' })).status === 401);
   check('new password works', !!(await login('aziza.k', 'boshqa5678')));
   check('admin changes login', (await call('PUT', `/admin/students/${ns.body.id}/account`, admin, { login: 'aziza.karimova' })).status === 204);
-  check('new login works', !!(await login('aziza.karimova', 'boshqa5678')));
+  const newStudent2 = await login('aziza.karimova', 'boshqa5678');
+  check('new login works', !!newStudent2);
   check('login taken -> 422', (await call('PUT', `/admin/students/${ns.body.id}/account`, admin, { login: 'bekzod.rahimov' })).status === 422);
   const nt = await call('POST', '/admin/teachers', admin, { fullName: 'Bobur Aliyev', phone: '+998 91 000 11 22', login: 'bobur.aliyev', password: 'ustoz5678' });
   check('create teacher', nt.status === 201, nt.body);
@@ -231,10 +233,10 @@ async function main() {
   check('empty group cannot be notified -> 422', (await call('PUT', `/admin/groups/${ng.body.id}/payment-plan`, admin, { amount: 300000, dueDate: future })).status === 422);
   check('amount below minimum -> 422', (await call('PUT', `/admin/groups/${gr1.id}/payment-plan`, admin, { amount: 500, dueDate: future })).status === 422);
   check('past date -> 422', (await call('PUT', `/admin/groups/${gr1.id}/payment-plan`, admin, { amount: 500000, dueDate: '2020-01-01' })).status === 422);
-  const before = (await call('GET', '/notifications', newStudent)).body.length;
+  const before = (await call('GET', '/notifications', newStudent2)).body.length;
   const pub = await call('PUT', `/admin/groups/${gr1.id}/payment-plan`, admin, { amount: 520000, dueDate: future });
   check('plan saved, notice sent to every student of the group (11)', pub.status === 200 && pub.body.notice.recipients === 11, pub.body);
-  const n2 = (await call('GET', '/notifications', newStudent)).body;
+  const n2 = (await call('GET', '/notifications', newStudent2)).body;
   check('student got the payment notice', n2.length === before + 1 && n2[0].type === 'payment_notice' && n2[0].title.includes('520 000'), n2[0]);
   check('student sees the new plan in upcoming payments', (await call('GET', '/student/payments', student)).body.upcoming.some((u: any) => u.amount === 520000));
   check('a student of ANOTHER group did not get it', !(await call('GET', '/notifications', await login('zilola.hasanova', 'oquvchi123'))).body.some((n: any) => n.type === 'payment_notice'));
@@ -245,6 +247,29 @@ async function main() {
   check('settings read/write', (await call('PUT', '/me/settings', student, { theme: 'light' })).body.theme === 'light');
   check('invalid theme -> 422', (await call('PUT', '/me/settings', student, { theme: 'pink' })).status === 422);
   check('unknown field -> 422 (whitelist)', (await call('PUT', '/me/settings', student, { admin: true })).status === 422);
+
+
+  console.log('6. sessions (no JWT: random tokens stored as hashes)');
+  const tokenA = await login('zilola.hasanova', 'oquvchi123');
+  const tokenB = await login('zilola.hasanova', 'oquvchi123');
+  check('two logins give two different tokens', !!tokenA && !!tokenB && tokenA !== tokenB && tokenA.length === 64);
+  check('both work', (await call('GET', '/me', tokenA)).status === 200 && (await call('GET', '/me', tokenB)).status === 200);
+  check('a made-up token -> 401', (await call('GET', '/me', 'a'.repeat(64))).status === 401);
+  check('a JWT-looking token -> 401', (await call('GET', '/me', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOjF9.x')).status === 401);
+  const refreshed = await call('POST', '/auth/refresh', tokenA);
+  check('refresh gives a new token', refreshed.status === 200 && refreshed.body.token && refreshed.body.token !== tokenA, refreshed.body);
+  check('the old token stops working after refresh', (await call('GET', '/me', tokenA)).status === 401);
+  check('the new token works', (await call('GET', '/me', refreshed.body.token)).status === 200);
+  check('logout -> 204', (await call('POST', '/auth/logout', refreshed.body.token)).status === 204);
+  check('after logout the token is dead at once (401)', (await call('GET', '/me', refreshed.body.token)).status === 401);
+  check('the other session is not affected by that logout', (await call('GET', '/me', tokenB)).status === 200);
+  const tokenC = await login('zilola.hasanova', 'oquvchi123');
+  check('own password change keeps this session...', (await call('POST', '/me/password', tokenB, { current: 'oquvchi123', next: 'Boshqa2345a' })).status === 204 && (await call('GET', '/me', tokenB)).status === 200);
+  check('...and signs the other devices out', (await call('GET', '/me', tokenC)).status === 401);
+  const tokenD = await login('zilola.hasanova', 'Boshqa2345a');
+  const zid = (await call('GET', '/me', tokenD)).body.id;
+  check('admin resets the password', (await call('PUT', `/admin/students/${zid}/account`, admin, { password: 'Yangi99887a' })).status === 204);
+  check('every session of that student is gone (401)', (await call('GET', '/me', tokenB)).status === 401 && (await call('GET', '/me', tokenD)).status === 401);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

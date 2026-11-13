@@ -8,7 +8,7 @@ business rules with exact numbers, formulas and the endpoint list.
 ```bash
 cd backend
 npm install
-cp .env.example .env      # then set JWT_SECRET
+cp .env.example .env      # defaults work for local development
 npm run start:dev         # http://localhost:4000/api/v1   (Swagger: http://localhost:4000/api/docs)
 ```
 
@@ -64,12 +64,12 @@ API=http://localhost:4001/api/v1 npm run test:smoke
 ```
 src/
   main.ts              prefix /api/v1, CORS, global validation pipe, error filter, Swagger
-  app.module.ts        modules + global guards: rate limit -> JWT (401) -> roles (403)
+  app.module.ts        modules + global guards: rate limit -> session token (401) -> roles (403)
   core.module.ts       global module with the domain services and the /me, /files, content endpoints
   config/              rules.ts (every business-rule number), database.ts
-  common/              @Roles / @Public / @CurrentUser, JwtAuthGuard, RolesGuard, error filter, validation pipe
+  common/              @Roles / @Public / @CurrentUser, SessionAuthGuard, RolesGuard, error filter, validation pipe
   entities/            TypeORM entities (users, groups, lessons, homework, content)
-  auth/                POST /auth/login (the role comes from the account), JWT strategy
+  auth/                POST /auth/login (the role comes from the account), session tokens (SessionsService)
   users/ files/ notifications/ content/   accounts and settings, uploads (type/size rules), notifications, read-only content
   rooms/ groups/       rooms, schedule rules (room busy, teacher clash), enrolment, capacity
   lessons/ homework/ exams/ rewards/ payments/   the business rules (attendance lock, grading, late penalty, exam admission, XP, payment notices)
@@ -81,6 +81,8 @@ src/
 
 - **Roles:** `/student/*` only STUDENT, `/teacher/*` only TEACHER, `/admin/*` only ADMIN (403 otherwise). Student endpoints always
   use the user id from the token. A teacher only touches the groups they teach.
+- **Sessions, not JWT:** logging in creates a random token; only its SHA-256 hash is stored (table `sessions`) with an expiry (`SESSION_HOURS`, default 12). The client sends `Authorization: Bearer <token>`. Logout, a password change or the expiry ends the session on the server at once. No `JWT_SECRET` is needed.
+- **Safety guard:** a remote `DATABASE_URL` (Neon...) is refused on a developer's computer unless `ALLOW_REMOTE_DB=true`; on Render it works as usual. Keep `DATABASE_URL` empty in your local `.env` so tests never touch real data.
 - **Login:** a wrong login or password always gives the same 401 message; login attempts are rate limited (`LOGIN_RATE_LIMIT`
   per minute). Passwords are stored as bcrypt hashes and never returned.
 - **Errors** always look like `{ "error": { "code", "message", "fields?" } }`.

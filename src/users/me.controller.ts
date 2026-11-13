@@ -34,7 +34,7 @@ export class MeController {
   @Post('me/password')
   @HttpCode(204)
   async password(@CurrentUser() user: AuthUser, @Body() dto: ChangePasswordDto) {
-    await this.users.changeOwnPassword(user.id, dto.current, dto.next);
+    await this.users.changeOwnPassword(user.id, dto.current, dto.next, user.sessionId);
   }
 
   @Get('me/settings')

@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { SessionsService } from './auth/sessions.service';
 import { ContentController } from './content/content.controller';
 import { ALL_ENTITIES } from './entities';
 import { ExamsService } from './exams/exams.service';
@@ -16,7 +17,7 @@ import { RoomsService } from './rooms/rooms.service';
 import { MeController } from './users/me.controller';
 import { UsersService } from './users/users.service';
 
-const SERVICES = [StorageService, UsersService, NotificationsService, FilesService, RoomsService, GroupsService, RewardsService, ExamsService, LessonsService, HomeworkService, PaymentsService];
+const SERVICES = [SessionsService, StorageService, UsersService, NotificationsService, FilesService, RoomsService, GroupsService, RewardsService, ExamsService, LessonsService, HomeworkService, PaymentsService];
 
 /**
  * Domain services shared by the role panels (student / teacher / admin). The business rules live in these services,

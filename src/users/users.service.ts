@@ -4,6 +4,7 @@ import * as bcrypt from 'bcryptjs';
 import { Repository } from 'typeorm';
 import { Role } from '../common/enums';
 import { User, UserSettings } from '../entities';
+import { SessionsService } from '../auth/sessions.service';
 
 export const LOGIN_RE = /^[a-z0-9._-]{4,30}$/;
 export const PHONE_RE = /^\+998[ -]?\d{2}[ -]?\d{3}[ -]?\d{2}[ -]?\d{2}$/;
@@ -20,6 +21,7 @@ export class UsersService {
   constructor(
     @InjectRepository(User) private users: Repository<User>,
     @InjectRepository(UserSettings) private settings: Repository<UserSettings>,
+    private sessions: SessionsService,
   ) {}
 
   hash(password: string) {
@@ -86,16 +88,20 @@ export class UsersService {
       user.passwordChangedAt = new Date();
     }
     await this.users.save(user);
+    // a new password signs the person out everywhere (their old sessions must not outlive it)
+    if (input.password) await this.sessions.endAll(userId);
   }
 
   /** The signed-in user changes their own password. */
-  async changeOwnPassword(userId: number, current: string, next: string) {
+  async changeOwnPassword(userId: number, current: string, next: string, keepSessionId?: number) {
     const u = await this.users.createQueryBuilder('u').addSelect('u.passwordHash').where('u.id = :userId', { userId }).getOneOrFail();
     if (!this.verifyPassword(current, u.passwordHash)) throw new UnprocessableEntityException({ code: 'VALIDATION_ERROR', message: "Joriy parol noto'g'ri.", fields: { current: "Joriy parol noto'g'ri." } });
     if (current === next) throw new UnprocessableEntityException({ code: 'VALIDATION_ERROR', message: "Yangi parol joriy paroldan farq qilishi kerak.", fields: { next: 'Farq qilishi kerak.' } });
     u.passwordHash = this.hash(next);
     u.passwordChangedAt = new Date();
     await this.users.save(u);
+    // other devices are signed out; this one stays
+    await this.sessions.endAll(userId, keepSessionId);
   }
 
   async getSettings(userId: number) {

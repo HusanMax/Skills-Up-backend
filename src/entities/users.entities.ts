@@ -38,6 +38,16 @@ export class StoredFile {
   @CreateDateColumn() createdAt: Date;
 }
 
+/** A signed-in session. The token itself is never stored, only its SHA-256 hash. */
+@Entity('sessions')
+export class Session {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column({ type: Number }) userId: number;
+  @Index({ unique: true }) @Column({ type: String }) tokenHash: string;
+  @CreateDateColumn() createdAt: Date;
+  @Column({ type: Date }) expiresAt: Date;
+}
+
 @Entity('notifications')
 export class Notification {
   @PrimaryGeneratedColumn() id: number;

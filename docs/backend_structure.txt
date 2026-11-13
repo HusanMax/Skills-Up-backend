@@ -21,7 +21,7 @@ Backend NestJS (TypeScript) da yoziladi. Hujjatning 1-14 bo'limlari framework'da
 - REST API, JSON, prefiks: /api/v1
 - Baza: PostgreSQL (jadvallar quyida); ORM: TypeORM yoki Prisma (o'zingiz tanlang)
 - Fayl saqlash: S3-mos saqlash yoki server diski (jadval: files)
-- Autentifikatsiya: @nestjs/jwt + passport-jwt (access + refresh) yoki httpOnly cookie sessiya (tokenda role va user id bo'lsin)
+- Autentifikatsiya: JWT ISHLATILMAYDI. Login qilganda server tasodifiy token (sessiya) beradi va uning xeshini bazada saqlaydi (sessions jadvali, 5.1). Token har so'rovda `Authorization: Bearer <token>` bilan yuboriladi. JWT_SECRET kerak emas.
 - Parol xeshi: argon2id yoki bcrypt (frontend demo uchun SHA-256 ishlatgan, buni ishlatmang)
 
 ## 3. ROLLAR VA RUXSATLAR
@@ -57,7 +57,10 @@ Login sahifasi: login + parol. Rol hisobga qarab aniqlanadi.
 - Login katta-kichik harfga e'tiborsiz (saqlashda kichik harfda).
 - Xato bo'lsa HAR DOIM bitta umumiy javob: 401 "Login yoki parol noto'g'ri." (qaysi biri xato ekanini aytmang).
 - Urinishlarni cheklang (rate limit), ketma-ket xatolardan keyin vaqtincha bloklang.
-- POST /auth/logout, POST /auth/refresh (tanlangan usulga qarab).
+- POST /auth/logout: sessiya serverda o'chiriladi, token darhol ishlamay qoladi (204).
+- POST /auth/refresh: joriy token yangisiga almashtiriladi (yangi muddat), eskisi ishlamaydi.
+- Sessiya muddati SESSION_HOURS (standart 12 soat). Muddati o'tgan, noma'lum yoki o'chirilgan token -> 401.
+- Parol o'zgarganda sessiyalar tugaydi: admin boshqa odamning parolini o'zgartirsa, uning HAMMA sessiyasi o'chadi; o'zi o'zgartirsa, boshqa qurilmalardagi sessiyalar o'chadi, hozirgisi qoladi.
 - Login: 4-30 belgi, faqat kichik lotin harflari, raqam, nuqta, pastki chiziq, chiziq (a-z 0-9 . _ -). Butun tizimda UNIKAL (o'quvchi, ustoz, admin orasida).
 - Parol: kamida 8 belgi. O'z parolini o'zgartirishda kamida bitta harf va bitta raqam bo'lishi, eski paroldan farq qilishi kerak.
 - Parolni o'zgartirish (o'zi): POST /me/password { current, next } -> joriy parol noto'g'ri bo'lsa 422 "Joriy parol noto'g'ri."
@@ -77,7 +80,7 @@ Frontend login sahifasidan keyin rolga qarab O'Z panelini ochadi. Backend shu oq
       role = TEACHER  ->  /teacher     (ustoz paneli)
       role = ADMIN    ->  /admin       (admin paneli)
 4. Sahifa yangilanganda frontend GET /me ni chaqiradi: token yaroqli bo'lsa role va ism olinadi, aks holda 401 -> /login.
-5. "Chiqish" tugmasi: POST /auth/logout, token o'chiriladi, /login ga qaytadi.
+5. "Chiqish" tugmasi: POST /auth/logout (sessiya serverda o'chadi), token o'chiriladi, /login ga qaytadi.
 ```
 
 Misol: login o'quvchiniki bo'lsa (masalan "bekzod.rahimov"), kirgach O'QUVCHI paneli ochiladi va unda aynan SHU o'quvchining ma'lumotlari (guruhlari, darslari, XP, vazifalari, to'lovlari) ko'rinadi. Ustoz logini bilan kirsa ustoz paneli, admin logini bilan kirsa admin paneli ochiladi. Rolni foydalanuvchi o'zi tanlamaydi: u faqat login va paroldan keladi.
@@ -135,6 +138,13 @@ users
   created_at          timestamptz default now()
 
 students   (user_id pk fk users)  joined_at date, streak_days int default 0 (hisoblanadi, 7.9)
+
+sessions            (kirish sessiyalari; token o'zi saqlanmaydi, faqat SHA-256 xeshi)
+  id           pk
+  user_id      fk users
+  token_hash   text unique not null
+  created_at   timestamptz
+  expires_at   timestamptz not null   (created_at + SESSION_HOURS)
 teachers   (user_id pk fk users)
 ```
 
@@ -693,7 +703,7 @@ Xabar matnlari (frontenddagi misollar): "Login yoki parol noto'g'ri.", "Bunday l
 Hozir ma'lumot brauzerda quyidagi kalitlarda turibdi (localStorage). Backend ulanganda bular API ga almashadi:
 
 ```
-skillsup:session       login holati (rol)                       -> JWT / cookie sessiya
+skillsup:session       login holati (rol)                       -> sessiya tokeni (sessions jadvali)
 skillsup:preferences   mavzu va bildirishnoma sozlamalari       -> user_settings
 skillsup:lessons       o'quvchining darslari, progress, vazifa  -> lessons, lesson_progress, student_homework, submissions
 skillsup:teacher       ustozning darslari, boshqa o'quvchilar   -> lessons, homeworks, attendance, student_homework
@@ -733,7 +743,7 @@ Demo uchun frontenddagi ma'lumotlar:
 - Har endpointda rol va egalik tekshiruvi (ustoz faqat o'z guruhi, o'quvchi faqat o'z ma'lumoti).
 - Login endpointiga urinishlarni cheklash, umumiy xato matni.
 - Fayl yuklashda kengaytma, mime, hajm, nom tekshiruvi; fayllarni veb-ildizdan tashqarida saqlash; yuklab olishda ruxsatni tekshirish.
-- CORS faqat frontend domeniga; HTTPS; tokenlar uchun qisqa muddat + refresh.
+- CORS faqat frontend domeniga; HTTPS; sessiya tokenlari uchun qisqa muddat (SESSION_HOURS); token bazada faqat xesh ko'rinishida.
 - Admin harakatlari (login/parol o'zgartirish, o'quvchi qo'shish, to'lov eslatmasi) jurnalga yozilsin (tavsiya).
 - SQL in'ektsiyadan himoya (parametrlangan so'rovlar), kiruvchi matnlarni tozalash.
 
@@ -750,11 +760,11 @@ src/
   config/                      ConfigModule: konstantalar (6.1-bo'lim), env, DB
   common/
     decorators/                @Roles(...), @CurrentUser()
-    guards/                    JwtAuthGuard, RolesGuard
+    guards/                    SessionAuthGuard, RolesGuard
     filters/                   HttpExceptionFilter (10-bo'limdagi xato formati)
     pipes/                     fayl tekshiruvi (kengaytma, hajm)
     enums/                     Role, HomeworkStatus, Day
-  auth/                        login, logout, refresh, JwtStrategy, parol xeshlash (argon2/bcrypt)
+  auth/                        login, logout, refresh, SessionsService (sessiya tokenlari), parol xeshlash (argon2/bcrypt)
   users/                       User entity, /me, /me/password, /me/settings
   files/                       Multer yuklash, yuklab olish (Range qo'llab-quvvatlash: video uchun)
   groups/                      Group, GroupSchedule, GroupMember
@@ -777,28 +787,28 @@ Tavsiya: controllerlar rol bo'yicha (student/, teacher/, admin/ modullari) va ul
 
 ```
 @Controller('admin')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(SessionAuthGuard, RolesGuard)
 @Roles(Role.ADMIN)
 export class AdminStudentsController { ... }
 
 @Controller('teacher')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(SessionAuthGuard, RolesGuard)
 @Roles(Role.TEACHER)
 export class TeacherLessonsController {
   // ustozning o'z guruhi ekanini servisda tekshiring: group.teacherId === user.id, aks holda ForbiddenException
 }
 
 @Controller('student')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(SessionAuthGuard, RolesGuard)
 @Roles(Role.STUDENT)
 export class StudentLessonsController {
   // o'quvchi id sini HECH QACHON URL/body dan olmang: @CurrentUser() user.id
 }
 ```
 
-- JwtAuthGuard: tokenni tekshiradi, req.user = { id, role }. Yaroqsiz bo'lsa 401.
+- SessionAuthGuard: tokenni sessions jadvalidan tekshiradi (xesh bo'yicha), req.user = { id, role, sessionId }. Yaroqsiz yoki muddati o'tgan bo'lsa 401.
 - RolesGuard: Reflector orqali @Roles ni o'qiydi, req.user.role mos kelmasa 403 (4.2-bo'lim).
-- Login endpointi @Public() bilan belgilanadi (global JwtAuthGuard bo'lsa).
+- Login endpointi @Public() bilan belgilanadi (global SessionAuthGuard bo'lsa).
 - Egalik tekshiruvi (ustoz-guruh, o'quvchi-o'z ma'lumoti) servis qatlamida bajariladi.
 
 ### 15.3 DTO va validatsiya (class-validator)
