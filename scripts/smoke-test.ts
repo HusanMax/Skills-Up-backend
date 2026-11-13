@@ -1,6 +1,8 @@
 /* End-to-end smoke test of the API. Start the backend on an EMPTY database first (demo seed), then:
  *   API=http://localhost:4001/api/v1 npm run test:smoke
  */
+import ExcelJS from 'exceljs';
+
 const API = process.env.API ?? 'http://localhost:4000/api/v1';
 let passed = 0;
 let failed = 0;
@@ -241,8 +243,7 @@ async function main() {
   check('student sees the new plan in upcoming payments', (await call('GET', '/student/payments', student)).body.upcoming.some((u: any) => u.amount === 520000));
   check('a student of ANOTHER group did not get it', !(await call('GET', '/notifications', await login('zilola.hasanova', 'oquvchi123'))).body.some((n: any) => n.type === 'payment_notice'));
   check('notice shows in history', (await call('GET', '/admin/payments', admin)).body.notices[0].recipients === 11);
-  const rec = await call('POST', '/admin/payments', admin, { studentId: meId, groupId: gr1.id, amount: 500000, paidAt: '2026-11-05', method: 'Uzcard', description: "Standart to'lov" });
-  check('record a payment', rec.status === 201, rec.body);
+  check('the old record-payment route is gone (use invoices)', (await call('POST', '/admin/payments', admin, { studentId: meId, groupId: gr1.id, amount: 500000 })).status === 404);
   check('notifications can be marked read', (await call('POST', '/notifications/read-all', student)).status === 204 && (await call('GET', '/notifications', student)).body.every((n: any) => n.readAt));
   check('settings read/write', (await call('PUT', '/me/settings', student, { theme: 'light' })).body.theme === 'light');
   check('invalid theme -> 422', (await call('PUT', '/me/settings', student, { theme: 'pink' })).status === 422);
@@ -333,6 +334,140 @@ async function main() {
   check('a teacher cannot manage administrators (403)', (await call('POST', '/admin/admins', teacher, { fullName: 'Yomon Odam', login: 'yomon.odam', password: 'Admin2Pass99' })).status === 403);
   check('remove the new administrator', (await call('DELETE', `/admin/admins/${admin2.body.id}`, admin)).status === 204);
   check('their token is dead and they cannot sign in', (await call('GET', '/me', a2b)).status === 401 && (await call('POST', '/auth/login', undefined, { login: 'admin.ikki', password: 'Admin3Pass00' })).status === 401);
+
+
+  console.log('8. payments & sales reports + detail pages');
+  const rep = (q = '') => call('GET', `/admin/reports/payments${q}`, admin);
+  const allRows = async (q = '') => {
+    const out: any[] = [];
+    for (let page = 1; ; page++) {
+      const r = (await rep(`?${q}&limit=100&page=${page}`)).body;
+      out.push(...r.rows);
+      if (page >= r.totalPages) return { rows: out, report: r };
+    }
+  };
+  check('report: no token -> 401', (await call('GET', '/admin/reports/payments')).status === 401);
+  check('report: student -> 403', (await call('GET', '/admin/reports/payments', student)).status === 403);
+  check('report: teacher -> 403', (await call('GET', '/admin/reports/payments', teacher)).status === 403);
+  check('export: teacher -> 403', (await call('GET', '/admin/reports/payments/export', teacher)).status === 403);
+  const { rows: all, report: r0 } = await allRows();
+  const sum = (k: string, rows = all) => rows.reduce((t, r) => t + r[k], 0);
+  check('real data: many sales in the DB', all.length > 50 && r0.totalRows === all.length, all.length);
+  check('rows have client, date, total, paid, debt, status', all.every((r: any) => r.studentName && /^\d{4}-\d{2}-\d{2}$/.test(r.issuedAt) && r.total > 0 && r.paid >= 0 && r.debt >= 0 && ['PAID', 'UNPAID', 'PARTIALLY_PAID'].includes(r.status)));
+  check('per row: total = paid + debt (debt never negative, never counted twice)', all.every((r: any) => r.total === r.paid + r.debt));
+  check('status matches the money', all.every((r: any) => (r.status === 'PAID') === (r.debt === 0) && (r.status === 'UNPAID') === (r.paid === 0) && (r.status === 'PARTIALLY_PAID') === (r.paid > 0 && r.debt > 0)));
+  check('all three statuses exist', ['PAID', 'UNPAID', 'PARTIALLY_PAID'].every((x) => all.some((r: any) => r.status === x)));
+  const S = r0.summary;
+  check('summary: totalSales = sum of totals', S.totalSales === sum('total'), S);
+  check('summary: paid = sum of paid; debt = sum of debt', S.paid === sum('paid') && S.debt === sum('debt'));
+  check('summary: totalSales = paid + debt', S.totalSales === S.paid + S.debt);
+  const part = all.filter((r: any) => r.status === 'PARTIALLY_PAID'), unp = all.filter((r: any) => r.status === 'UNPAID'), full = all.filter((r: any) => r.status === 'PAID');
+  check('summary: partial paid part + remaining debt', S.partialPaid === sum('paid', part) && S.partialRemaining === sum('debt', part));
+  check('summary: unpaid amount', S.unpaidAmount === sum('total', unp));
+  check('summary: paid = fully paid + paid part of partial', S.paid === sum('paid', full) + S.partialPaid);
+  check('summary: debt = unpaid + rest of partial', S.debt === S.unpaidAmount + S.partialRemaining);
+  check('summary: percent', Math.abs(S.paymentPercent - Math.round((S.paid / S.totalSales) * 1000) / 10) < 0.001, S.paymentPercent);
+  check('summary: counts', S.counts.PAID === full.length && S.counts.UNPAID === unp.length && S.counts.PARTIALLY_PAID === part.length);
+  check('no date filter -> no comparison', r0.comparison === null && r0.series === null);
+  // paging
+  const p1 = (await rep('?limit=10&page=1')).body, p2 = (await rep('?limit=10&page=2')).body;
+  check('paging: 10 rows per page, pages differ, totals stay', p1.rows.length === 10 && p2.rows.length === 10 && p1.rows[0].id !== p2.rows[0].id && p1.summary.totalSales === S.totalSales && p1.totalPages === Math.ceil(all.length / 10));
+  check('newest sale first', all.every((r: any, i: number) => i === 0 || all[i - 1].issuedAt >= r.issuedAt));
+  // filters
+  const today = new Date().toISOString().slice(0, 10);
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+  const range = await allRows(`from=${daysAgo(40)}&to=${today}`);
+  check('date range: only sales inside it', range.rows.length > 0 && range.rows.length < all.length && range.rows.every((r: any) => r.issuedAt >= daysAgo(40) && r.issuedAt <= today));
+  check('date range: equals the same filter done by hand', range.rows.length === all.filter((r: any) => r.issuedAt >= daysAgo(40) && r.issuedAt <= today).length);
+  check('date range: summary follows the filter', range.report.summary.totalSales === sum('total', range.rows));
+  const day1 = (await rep(`?from=${all[0].issuedAt}&to=${all[0].issuedAt}`)).body;
+  check('single day filter', day1.totalRows > 0 && day1.rows.every((r: any) => r.issuedAt === all[0].issuedAt));
+  check('from without to -> 422', (await rep(`?from=${today}`)).status === 422);
+  check('from after to -> 422', (await rep(`?from=${today}&to=${daysAgo(5)}`)).status === 422);
+  check('bad date -> 422', (await rep('?from=2026-13-45&to=2026-14-01')).status === 422);
+  check('bad status -> 422', (await rep('?status=NOPE')).status === 422);
+  const st = (await allRows('status=PARTIALLY_PAID')).rows;
+  check('status filter', st.length === part.length && st.every((r: any) => r.status === 'PARTIALLY_PAID'));
+  const who = all[3].studentName.split(' ')[0].toUpperCase();
+  const q1 = (await allRows(`q=${encodeURIComponent(who)}`)).rows;
+  check('client name search (case-insensitive)', q1.length > 0 && q1.every((r: any) => r.studentName.toUpperCase().includes(who)) && q1.length === all.filter((r: any) => r.studentName.toUpperCase().includes(who)).length);
+  const both = (await allRows(`q=${encodeURIComponent(who)}&status=UNPAID`)).rows;
+  check('search + status together', both.every((r: any) => r.status === 'UNPAID' && r.studentName.toUpperCase().includes(who)));
+  check('search with no match -> emptyRep, zero totals', (await rep('?q=zzzzzz')).body.summary.totalSales === 0 && (await rep('?q=zzzzzz')).body.rows.length === 0);
+  const groupsList = (await call('GET', '/admin/groups', admin)).body;
+  const byGroup = (await allRows(`groupId=${groupsList[0].id}`)).rows;
+  check('group filter', byGroup.length > 0 && byGroup.every((r: any) => r.groupId === groupsList[0].id));
+  // growth vs previous period
+  const cmp = (await rep(`?from=${daysAgo(30)}&to=${today}`)).body;
+  const prevRows = (await allRows(`from=${daysAgo(61)}&to=${daysAgo(31)}`)).rows;
+  check('comparison: previous period has the same length, just before', cmp.comparison.previousTo === daysAgo(31) && cmp.comparison.previousFrom === daysAgo(61), cmp.comparison);
+  check('comparison: previous sales are right', cmp.comparison.previousTotalSales === sum('total', prevRows));
+  check('comparison: growth % is right', prevRows.length > 0 && cmp.comparison.growthPercent === Math.round(((cmp.summary.totalSales - cmp.comparison.previousTotalSales) / cmp.comparison.previousTotalSales) * 1000) / 10, cmp.comparison);
+  check('chart series: one point per day, sums match', cmp.series.points.length === 31 && cmp.series.points.reduce((t: number, p: any) => t + p.current, 0) === cmp.summary.totalSales && cmp.series.points.reduce((t: number, p: any) => t + p.previous, 0) === cmp.comparison.previousTotalSales);
+  const emptyRep = (await rep(`?from=${daysAgo(3000)}&to=${daysAgo(2990)}`)).body;
+  check('previous period without sales -> growth null (no divide by zero)', emptyRep.comparison.growthPercent === null && emptyRep.summary.totalSales === 0);
+  // creating sales and payments
+  const gid = groupsList[1].id;
+  const inv = await call('POST', '/admin/invoices', admin, { groupId: gid, period: '2025-01', dueDate: '2025-01-20', issuedAt: '2025-01-10', amount: 300000 });
+  check('bill a group: one invoice per student', inv.status === 201 && inv.body.created === groupsList[1].members && inv.body.skipped === 0, inv.body);
+  const inv2 = await call('POST', '/admin/invoices', admin, { groupId: gid, period: '2025-01', dueDate: '2025-01-20', issuedAt: '2025-01-10', amount: 300000 });
+  check('billing twice never bills twice', inv2.body.created === 0 && inv2.body.skipped === groupsList[1].members, inv2.body);
+  check('invoice validation: low amount / bad period / unknown group', (await call('POST', '/admin/invoices', admin, { groupId: gid, period: '2026-10', dueDate: '2026-10-20', amount: 50 })).status === 422 && (await call('POST', '/admin/invoices', admin, { groupId: gid, period: '2026-13', dueDate: '2026-10-20', amount: 300000 })).status === 422 && (await call('POST', '/admin/invoices', admin, { groupId: 99999, dueDate: '2026-10-20', amount: 300000 })).status === 404);
+  check('teacher cannot bill (403)', (await call('POST', '/admin/invoices', teacher, { groupId: gid, dueDate: '2026-10-20' })).status === 403);
+  const fresh = (await allRows('from=2025-01-10&to=2025-01-10')).rows.filter((r: any) => r.total === 300000 && r.groupId === gid);
+  check('new sales are UNPAID with full debt', fresh.length === inv.body.created && fresh.every((r: any) => r.status === 'UNPAID' && r.debt === 300000 && r.paid === 0));
+  const saleRow = fresh[0];
+  const pay1 = await call('POST', `/admin/invoices/${saleRow.id}/payments`, admin, { amount: 100000, paidAt: '2025-01-12', method: 'Naqd pul' });
+  check('partial payment -> PARTIALLY_PAID, debt 200 000', pay1.status === 201 && pay1.body.status === 'PARTIALLY_PAID' && pay1.body.paid === 100000 && pay1.body.debt === 200000, pay1.body);
+  const sBefore = (await rep()).body.summary;
+  check('over-payment -> 422', (await call('POST', `/admin/invoices/${saleRow.id}/payments`, admin, { amount: 200001, method: 'Naqd pul' })).status === 422);
+  check('zero payment -> 422', (await call('POST', `/admin/invoices/${saleRow.id}/payments`, admin, { amount: 0, method: 'Naqd pul' })).status === 422);
+  check('future date -> 422', (await call('POST', `/admin/invoices/${saleRow.id}/payments`, admin, { amount: 1000, paidAt: '2099-01-01', method: 'Naqd pul' })).status === 422);
+  check('unknown invoice -> 404', (await call('POST', '/admin/invoices/999999/payments', admin, { amount: 1000, method: 'Naqd pul' })).status === 404);
+  const pay2 = await call('POST', `/admin/invoices/${saleRow.id}/payments`, admin, { amount: 200000, paidAt: '2025-01-15', method: 'Payme' });
+  check('second instalment -> PAID, debt 0', pay2.body.status === 'PAID' && pay2.body.paid === 300000 && pay2.body.debt === 0, pay2.body);
+  check('paid invoice accepts nothing more -> 422', (await call('POST', `/admin/invoices/${saleRow.id}/payments`, admin, { amount: 1000, method: 'Naqd pul' })).status === 422);
+  const sAfter = (await rep()).body.summary;
+  check('instalments: total sales unchanged, paid +300 000, debt -300 000 (nothing counted twice)', sAfter.totalSales === sBefore.totalSales && sAfter.paid === sBefore.paid + 200000 && sAfter.debt === sBefore.debt - 200000, { sBefore, sAfter });
+  // Excel
+  const xr = await fetch(`${API}/admin/reports/payments/export?status=PARTIALLY_PAID&from=${daysAgo(90)}&to=${today}`, { headers: { Authorization: `Bearer ${admin}` } });
+  check('export: 200 + xlsx content type + attachment', xr.status === 200 && (xr.headers.get('content-type') ?? '').includes('spreadsheetml') && (xr.headers.get('content-disposition') ?? '').includes('.xlsx'), xr.headers.get('content-type'));
+  const buf = Buffer.from(await xr.arrayBuffer());
+  check('export: a real xlsx (zip signature PK)', buf[0] === 0x50 && buf[1] === 0x4b);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf as any);
+  const exp = (await allRows(`status=PARTIALLY_PAID&from=${daysAgo(90)}&to=${today}`));
+  check('export: sheets Summary, Payments, Transactions', ['Summary', 'Payments', 'Transactions'].every((n) => !!wb.getWorksheet(n)), wb.worksheets.map((w) => w.name));
+  const ws = wb.getWorksheet('Payments')!;
+  const dataRows: any[][] = [];
+  ws.eachRow((row, i) => { if (i > 1 && row.getCell(2).value !== 'JAMI') dataRows.push(row.values as any[]); });
+  check('export: ALL matching rows (more than one page of 10), not the current page', exp.rows.length > 10 && dataRows.length === exp.rows.length, { exported: dataRows.length, expected: exp.rows.length });
+  check('export: every row has the chosen status only', dataRows.every((v) => v[10] === "Qisman to'langan"));
+  const totRow = ws.lastRow!.values as any[];
+  check('export: totals row equals the report summary', totRow[2] === 'JAMI' && totRow[7] === exp.report.summary.totalSales && totRow[8] === exp.report.summary.paid && totRow[9] === exp.report.summary.debt, totRow);
+  const sumText: string[] = [];
+  wb.getWorksheet('Summary')!.eachRow((row) => sumText.push(row.values!.toString()));
+  check('export: Summary keeps the filters and the totals', sumText.some((t) => t.includes(`${daysAgo(90)} — ${today}`)) && sumText.some((t) => t.includes('PARTIALLY_PAID')) && sumText.some((t) => t.includes(String(exp.report.summary.totalSales))));
+  const xAll = new ExcelJS.Workbook();
+  await xAll.xlsx.load(Buffer.from(await (await fetch(`${API}/admin/reports/payments/export`, { headers: { Authorization: `Bearer ${admin}` } })).arrayBuffer()) as any);
+  check('export without filters: every sale', xAll.getWorksheet('Payments')!.rowCount === (await rep()).body.totalRows + 2, xAll.getWorksheet('Payments')!.rowCount);
+  check('export: bad filter -> 422 (no file)', (await fetch(`${API}/admin/reports/payments/export?status=NOPE`, { headers: { Authorization: `Bearer ${admin}` } })).status === 422);
+  // detail pages
+  const t1 = (await call('GET', '/admin/teachers', admin)).body.find((t: any) => t.login === 'dilnoza.rahimova');
+  const td = await call('GET', `/admin/teachers/${t1.id}`, admin);
+  check('teacher detail: every group with schedule, students, lessons', td.status === 200 && td.body.groups.length >= 2 && td.body.groups.every((g: any) => g.schedule.length > 0 && typeof g.members === 'number') && td.body.totals.groups >= 2 && td.body.totals.students > 0 && td.body.totals.weeklySessions >= 4, td.body.totals);
+  const gd = await call('GET', `/admin/groups/${td.body.groups[0].id}`, admin);
+  check('group detail: teacher link, students with money, totals', gd.status === 200 && gd.body.teacher.id === t1.id && gd.body.students.length === gd.body.members && gd.body.students.every((s: any) => s.totalSales === s.paid + s.debt) && gd.body.totals.totalSales === gd.body.students.reduce((t: number, s: any) => t + s.totalSales, 0), gd.body.totals);
+  const sd = await call('GET', `/admin/students/${gd.body.students[0].id}`, admin);
+  check('student detail: groups, invoices, payments, totals', sd.status === 200 && sd.body.groups.length >= 1 && sd.body.invoices.length > 0 && sd.body.totals.totalSales === sd.body.totals.paid + sd.body.totals.debt && sd.body.payments.reduce((t: number, p: any) => t + p.amount, 0) === sd.body.totals.paid, sd.body.totals);
+  const manyToMany = (await call('GET', '/admin/students', admin)).body.find((s: any) => s.groups.length >= 2);
+  const sd2 = await call('GET', `/admin/students/${manyToMany.id}`, admin);
+  check('many-to-many: one student in several groups, each linking to its teacher', sd2.body.groups.length >= 2 && sd2.body.groups.every((g: any) => g.teacher.id && g.teacher.fullName), sd2.body.groups.length);
+  const rd = await call('GET', `/admin/rooms/${groupsList.flatMap((g: any) => g.schedule).find((x: any) => x.roomId).roomId}`, admin);
+  check('room detail: groups using it with slots', rd.status === 200 && rd.body.groups.length >= 1 && rd.body.weeklySlots >= 2 && rd.body.groups[0].slots.every((s: any) => s.roomId === rd.body.id), rd.body);
+  check('detail: unknown ids -> 404', (await call('GET', '/admin/teachers/99999', admin)).status === 404 && (await call('GET', '/admin/students/99999', admin)).status === 404 && (await call('GET', '/admin/groups/99999', admin)).status === 404 && (await call('GET', '/admin/rooms/99999', admin)).status === 404);
+  check('detail: a student id on the teacher route -> 404', (await call('GET', `/admin/teachers/${gd.body.students[0].id}`, admin)).status === 404);
+  check('detail: teacher/student cannot open admin details (403)', (await call('GET', `/admin/students/${gd.body.students[0].id}`, teacher)).status === 403 && (await call('GET', `/admin/groups/${gd.body.id}`, student)).status === 403);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

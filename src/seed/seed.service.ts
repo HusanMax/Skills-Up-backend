@@ -1,11 +1,11 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DataSource } from 'typeorm';
+import { DataSource, In, IsNull } from 'typeorm';
 import { addHours, dateStr, endTime } from '../common/dates';
 import { Day, HwStatus, Role } from '../common/enums';
 import { DEMO_PASSWORDS } from '../config/rules';
 import {
-  Activity, Attendance, CareerVideo, Faq, Group, GroupMember, GroupSchedule, Guide, Homework, Lesson, LessonProgress, Payment, PaymentPlan, Room,
+  Activity, Attendance, CareerVideo, Faq, Group, GroupMember, GroupSchedule, Guide, Homework, Invoice, Lesson, LessonProgress, Payment, PaymentPlan, Room,
   StudentHomework, Submission, User, UserSettings,
 } from '../entities';
 import { SessionsService } from '../auth/sessions.service';
@@ -43,7 +43,32 @@ export class SeedService implements OnApplicationBootstrap {
 
   async onApplicationBootstrap() {
     if (this.config.get('SEED_DEMO', 'true') !== 'false' && (await this.ds.manager.count(User)) === 0) await this.run();
+    await this.backfillInvoices();
     await this.syncAdminFromEnv();
+  }
+
+  /**
+   * Payments saved before invoices existed have no sale to belong to. Each student/group/month of them becomes one
+   * invoice worth exactly what was paid (so it reads PAID) and the payments are linked to it. Runs only for payments
+   * without an invoice, so after the first time it does nothing.
+   */
+  private async backfillInvoices() {
+    const em = this.ds.manager;
+    const legacy = await em.find(Payment, { where: { invoiceId: IsNull() }, order: { paidAt: 'ASC', id: 'ASC' } });
+    if (!legacy.length) return;
+    const buckets = new Map<string, Payment[]>();
+    for (const p of legacy) {
+      const key = `${p.studentId}|${p.groupId}|${p.paidAt.slice(0, 7)}`;
+      buckets.set(key, [...(buckets.get(key) ?? []), p]);
+    }
+    for (const list of buckets.values()) {
+      const first = list[0]!;
+      const period = first.paidAt.slice(0, 7);
+      const existing = await em.findOneBy(Invoice, { studentId: first.studentId, groupId: first.groupId, period });
+      const invoice = existing ?? (await em.save(Invoice, em.create(Invoice, { studentId: first.studentId, groupId: first.groupId, period, issuedAt: first.paidAt, dueDate: first.paidAt, amount: list.reduce((s, p) => s + p.amount, 0) })));
+      await em.update(Payment, { id: In(list.map((p) => p.id)) }, { invoiceId: invoice.id });
+    }
+    this.log.log(`${legacy.length} old payment(s) linked to ${buckets.size} invoice(s)`);
   }
 
   /**
@@ -134,9 +159,23 @@ export class SeedService implements OnApplicationBootstrap {
       { groupId: gr1.id, amount: 500_000, dueDate: due(22) }, { groupId: gr2.id, amount: 400_000, dueDate: due(25) }, { groupId: gr3.id, amount: 450_000, dueDate: due(28) },
     ]);
     const pays: Partial<Payment>[] = [];
-    for (let k = 3; k >= 1; k--) {
-      pays.push({ studentId: me.id, groupId: gr1.id, amount: 500_000, paidAt: due(-30 * k + 25), method: 'Uzcard •• 8600', description: "Standart to'lov" });
-      pays.push({ studentId: me.id, groupId: gr2.id, amount: 400_000, paidAt: due(-30 * k + 27), method: 'Humo •• 9860', description: "Standart to'lov" });
+    // sales for the last 3 months: every student of every group gets one invoice per month; some are paid in full,
+    // some in part (sometimes in two instalments), some not at all
+    const METHODS = ['Uzcard •• 8600', 'Humo •• 9860', 'Naqd pul', 'Payme'];
+    const rest = (a: number) => a - Math.round((a * 0.4) / 1000) * 1000;
+    for (const [gi, [g, amount, members]] of ([[gr1, 500_000, m1], [gr2, 400_000, m2], [gr3, 450_000, m3]] as [Group, number, User[]][]).entries()) {
+      for (const [si, u] of members.entries()) {
+        for (let k = 2; k >= 0; k--) {
+          const base = -31 * k - 3 - (si % 7); // 31 days apart, so every invoice falls in its own calendar month
+          const issuedAt = due(base);
+          const invoice = await em.save(Invoice, em.create(Invoice, { studentId: u.id, groupId: g.id, period: issuedAt.slice(0, 7), issuedAt, dueDate: due(base + 10), amount }));
+          const kind = u === me ? (k >= 1 || gi === 1 ? 'PAID' : 'UNPAID') : [ 'PAID', 'PAID', 'PARTIAL', 'UNPAID' ][(si + k + gi) % 4];
+          const pay = (part: number, extra: number) => pays.push({ invoiceId: invoice.id, studentId: u.id, groupId: g.id, amount: part, paidAt: due(Math.min(base + extra, 0)), method: METHODS[(si + gi) % METHODS.length]!, description: "Standart to'lov" });
+          if (kind === 'PAID' && si % 2 === 1 && u !== me) { pay(Math.round((amount * 0.4) / 1000) * 1000, 1); pay(rest(amount), 6); }
+          else if (kind === 'PAID') pay(amount, 2 + (si % 3));
+          else if (kind === 'PARTIAL') pay(Math.round((amount * 0.4) / 1000) * 1000, 3);
+        }
+      }
     }
     await em.insert(Payment, pays);
 

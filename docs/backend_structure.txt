@@ -108,7 +108,7 @@ Rolga tegishli sahifa manzillari:
 ```
 STUDENT   /, /lessons, /lessons/:id, /leaderboard, /career, /guides, /groups, /analytics, /payments, /settings
 TEACHER   /teacher, /teacher/groups, /teacher/lessons, /teacher/lessons/new, /teacher/lessons/:id, /teacher/journal, /teacher/review, /teacher/settings
-ADMIN     /admin, /admin/students, /admin/teachers, /admin/groups, /admin/rooms, /admin/payments, /admin/settings
+ADMIN     /admin, /admin/students(/:id), /admin/teachers(/:id), /admin/groups(/:id), /admin/rooms(/:id), /admin/payments, /admin/reports, /admin/admins, /admin/settings
 ```
 
 MUHIM (backend uchun): frontend guard faqat sahifalarni brauzerda yashiradi, uni chetlab o'tish mumkin. HAQIQIY himoya backendda bo'lishi shart:
@@ -293,7 +293,8 @@ Imtihon alohida jadval emas: imtihon = is_exam darsi. Qaysi darslarni qamrab oli
 ### 5.6 To'lovlar va bildirishnomalar
 
 ```
-payments            (o'quvchi to'lagan to'lovlar tarixi)
+invoices            (savdo/hisob: o'quvchi + guruh + davr YYYY-MM, issuedAt=savdo sanasi, dueDate, amount; unikal: studentId+groupId+period)
+payments            (to'lovlar; invoiceId -> invoices; holat (PAID/UNPAID/PARTIALLY_PAID) saqlanmaydi, to'lovlardan hisoblanadi)
   id           pk
   student_id   fk users
   group_id     fk groups
@@ -678,7 +679,36 @@ DELETE /admin/groups/:id      dars o'tilmagan bo'lsa o'chadi, o'tilgan bo'lsa AR
 GET   /admin/payments         -> { groups:[ { groupId,name,members,plan:{amount,dueDate},daysLeft } ], notices:[ ...tarix ] }
 PUT   /admin/groups/:id/payment-plan   { amount, dueDate }   -> { plan, notice:{ id, recipients } }
          guruhdagi hamma o'quvchiga bildirishnoma yuboradi (6.8)
-POST  /admin/payments         { studentId, groupId, amount, paidAt, method, description }   -> payment   (TAKLIF: to'lov yozish; frontendda hali yo'q)
+POST  /admin/invoices         { groupId, dueDate, period?(YYYY-MM), amount?, issuedAt? } -> { group, period, amount, created, skipped }
+                              guruhdagi HAR bir o'quvchiga bitta hisob; avval yozilganlar o'tkazib yuboriladi (ikki marta hisoblanmaydi)
+POST  /admin/invoices/:id/payments { amount, paidAt?, method, description? } -> hisob qatori (qolgan qarzdan ko'p bo'lsa 422)
+
+--- To'lovlar va savdo hisoboti (faqat ADMIN; ustoz/o'quvchi 403, tokensiz 401) ---
+GET   /admin/reports/payments?from&to&q&status&groupId&page&limit
+      from va to BIRGA (YYYY-MM-DD), q = mijoz ismi, status = PAID|UNPAID|PARTIALLY_PAID, limit <= 100
+      -> { filters, summary:{ totalSales, paid, debt, unpaidAmount, partialPaid, partialRemaining, paidInFull, overdueDebt,
+                              paymentPercent, invoices, counts:{PAID,UNPAID,PARTIALLY_PAID} },
+           comparison:{ previousFrom, previousTo, previousTotalSales, previousPaid, growthPercent|null, paidGrowthPercent|null } | null,
+           series:{ bucketDays, points:[{ label, previousLabel, current, previous, paid }] } | null,
+           rows:[{ id, studentId, studentName, groupId, groupName, period, issuedAt, dueDate, total, paid, debt, status, overdue }],
+           page, limit, totalRows, totalPages }
+      Hisoblash: total = paid + debt (har qatorda va jamida); paid = to'liq to'langanlar + qisman to'langanlarning to'langan qismi;
+      debt = to'lanmagan + qisman to'langanlarning qolgan qismi. Hech narsa ikki marta sanalmaydi.
+      Oldingi davr = xuddi shu uzunlikdagi, from dan oldingi davr. Oldingi davrda savdo yo'q bo'lsa growthPercent = null.
+      Sana oralig'i berilmasa comparison va series = null.
+GET   /admin/reports/payments/export?(xuddi shu filtrlar)   -> HAQIQIY .xlsx (Content-Disposition: attachment)
+      Varaqlar: Summary (filtrlar, ko'rsatkichlar, oldingi davr bilan o'sish), Payments (BARCHA mos hisoblar, sahifalashsiz, JAMI qatori),
+      Transactions (har bir to'lov). Kutubxona: exceljs.
+
+--- "Bitta yozuvni ochish" sahifalari (bog'langan yozuvlar id + nom bilan; one-to-many va many-to-many uchun) ---
+GET   /admin/teachers/:id     -> { ...shaxs, groups:[guruh+jadval+o'quvchilar+darslar], totals:{ groups, archivedGroups, students, weeklySessions, lessons } }
+GET   /admin/students/:id     -> { ...shaxs, groups:[guruh+ustoz+jadval], invoices:[hisob qatorlari], payments:[...], totals:{summary} }
+GET   /admin/groups/:id       -> { ...guruh, teacher:{id,fullName}, students:[{id,fullName,phone,...summary}], totals, recentInvoices }
+GET   /admin/rooms/:id        -> { id, name, capacity, weeklySlots, groups:[{id,name,teacher,members,slots}] }
+      (POST /admin/payments olib tashlandi: to'lov endi hisobga bog'lanadi.)
+
+Eski to'lovlar (invoiceId yo'q) server ishga tushganda avtomatik hisobga ko'chiriladi: har bir o'quvchi/guruh/oy uchun bitta hisob,
+summasi to'langan summaga teng (PAID).
 ```
 
 ## 10. XATOLAR VA VALIDATSIYA
@@ -853,7 +883,7 @@ Global: app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitel
 
 ### 15.4 Entity lar (TypeORM nomlari, 5-bo'limdagi jadvallar bilan 1:1)
 
-User, Student, Teacher, Room, Group, GroupSchedule, GroupMember, Lesson, LessonProgress, Attendance, Homework, HomeworkAttachment, StudentHomework, Submission, SubmissionFile, ExamResult, Payment, PaymentPlan, PaymentNotice, Notification, UserSettings, StoredFile (files jadvali), CareerVideo, Guide, Faq, Activity.
+User, Student, Teacher, Room, Group, GroupSchedule, GroupMember, Lesson, LessonProgress, Attendance, Homework, HomeworkAttachment, StudentHomework, Submission, SubmissionFile, ExamResult, Invoice, Payment, PaymentPlan, PaymentNotice, Notification, UserSettings, StoredFile (files jadvali), CareerVideo, Guide, Faq, Activity.
 
 Muhim cheklovlar entity/migratsiyada:
 - User.login unique (kichik harfga keltirib saqlang).
@@ -870,7 +900,8 @@ ExamsService        imtihon qamrovi (7.5), ruxsat (missing darslar), ball kiriti
 AttendanceService   belgilash, mark-all, save (qulflash; hamma o'quvchi uchun aniq yozuv), reopen; saqlangan bo'lsa ConflictException
 HomeworkService     berish/yangilash (faqat NOT_DONE va berilmaganlarga), topshirish, baholash, qaytarish (+24 soat)
 ScheduleService     xona bandligi, bo'sh xonalar, ustoz to'qnashuvi (6.7); guruh ochish tranzaksiyada
-PaymentsService     rejani yangilash + PaymentNotice + guruhdagi hamma o'quvchiga Notification (bitta tranzaksiyada)
+ReportsService      hisobot: filtrlar, summary, oldingi davr bilan solishtirish, grafik seriyasi, Excel eksport
+PaymentsService     hisob yaratish, hisobga to'lov qo'shish; rejani yangilash + PaymentNotice + guruhdagi hamma o'quvchiga Notification (bitta tranzaksiyada)
 AccountsService     admin: login/parol o'zgartirish; o'zi: parolni o'zgartirish
 ```
 

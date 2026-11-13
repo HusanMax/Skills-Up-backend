@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
+import { NotFoundException } from '@nestjs/common';
 import { dateStr } from '../common/dates';
 import { conflict, unprocessable } from '../common/errors';
 import { RULES } from '../config/rules';
-import { Group, GroupMember, Payment, PaymentNotice, PaymentPlan } from '../entities';
+import { Group, GroupMember, Invoice, Payment, PaymentNotice, PaymentPlan } from '../entities';
+import { ReportsService } from './reports.service';
 import { GroupsService } from '../groups/groups.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -21,6 +23,8 @@ export class PaymentsService {
     private ds: DataSource,
     private groupsSvc: GroupsService,
     private notifications: NotificationsService,
+    private reports: ReportsService,
+    @InjectRepository(Invoice) private invoices: Repository<Invoice>,
     @InjectRepository(Payment) private payments: Repository<Payment>,
     @InjectRepository(PaymentPlan) private plans: Repository<PaymentPlan>,
     @InjectRepository(PaymentNotice) private notices: Repository<PaymentNotice>,
@@ -77,13 +81,46 @@ export class PaymentsService {
     };
   }
 
-  /** Admin writes down a payment a student made (suggested endpoint; the frontend does not have it yet). */
-  async record(input: { studentId: number; groupId: number; amount: number; paidAt: string; method: string; description: string }) {
-    await this.groupsSvc.assertMember(input.studentId, input.groupId).catch(() => {
-      throw conflict("O'quvchi bu guruhda emas.");
-    });
+  /**
+   * One sale (invoice) for EVERY student of a group for one period. Students that already have an invoice for that
+   * group and period are skipped, so pressing the button twice never bills anyone twice.
+   */
+  async createInvoices(input: { groupId: number; period?: string; amount?: number; issuedAt?: string; dueDate: string }) {
+    const group = await this.groupsSvc.byId(input.groupId);
+    const today = dateStr(new Date());
+    const issuedAt = input.issuedAt ?? today;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(issuedAt) || Number.isNaN(Date.parse(issuedAt))) throw unprocessable("Savdo sanasi noto'g'ri.", 'issuedAt');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.dueDate) || Number.isNaN(Date.parse(input.dueDate))) throw unprocessable("To'lov muddatini tanlang.", 'dueDate');
+    if (input.dueDate < issuedAt) throw unprocessable("To'lov muddati savdo sanasidan oldin bo'lmasin.", 'dueDate');
+    const period = input.period ?? issuedAt.slice(0, 7);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw unprocessable("Davr YYYY-MM ko'rinishida bo'lsin.", 'period');
+    const plan = await this.plans.findOneBy({ groupId: group.id });
+    const amount = input.amount ?? plan?.amount;
+    if (amount === undefined || !Number.isInteger(amount) || amount < RULES.MIN_PAYMENT) throw unprocessable("Summa so'mda, kamida 10 000.", 'amount');
+    const studentIds = await this.groupsSvc.memberIds(group.id);
+    if (!studentIds.length) throw unprocessable("Guruhda o'quvchi yo'q.", 'groupId');
+    const existing = new Set((await this.invoices.findBy({ groupId: group.id, period })).map((i) => i.studentId));
+    const fresh = studentIds.filter((id) => !existing.has(id));
+    if (fresh.length) await this.invoices.insert(fresh.map((studentId) => ({ studentId, groupId: group.id, period, issuedAt, dueDate: input.dueDate, amount })));
+    return { group: group.name, period, amount, created: fresh.length, skipped: studentIds.length - fresh.length };
+  }
+
+  /** A student's payment against one invoice; it can never be more than what is still owed. */
+  async addPayment(invoiceId: number, input: { amount: number; paidAt?: string; method: string; description?: string }) {
+    const invoice = await this.invoices.findOneBy({ id: invoiceId });
+    if (!invoice) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Savdo topilmadi.' });
+    const paidAt = input.paidAt ?? dateStr(new Date());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(paidAt) || Number.isNaN(Date.parse(paidAt))) throw unprocessable("To'lov sanasi noto'g'ri.", 'paidAt');
+    if (paidAt > dateStr(new Date())) throw unprocessable("To'lov sanasi kelajakda bo'lmasin.", 'paidAt');
     if (!Number.isInteger(input.amount) || input.amount < 1) throw unprocessable("Summa musbat butun son bo'lsin.", 'amount');
-    return this.payments.save(this.payments.create(input));
+    // one transaction: the remaining debt is read and the payment written together
+    await this.ds.transaction(async (em) => {
+      const { paid } = (await em.createQueryBuilder(Payment, 'p').select('COALESCE(SUM(p.amount), 0)', 'paid').where('p.invoiceId = :id', { id: invoiceId }).getRawOne<{ paid: number | string }>())!;
+      const left = invoice.amount - Number(paid);
+      if (input.amount > left) throw unprocessable(left > 0 ? `Qolgan qarz ${som(left)}: undan ko'p kiritib bo'lmaydi.` : "Bu savdo to'liq to'langan.", 'amount');
+      await em.save(Payment, em.create(Payment, { invoiceId, studentId: invoice.studentId, groupId: invoice.groupId, amount: input.amount, paidAt, method: input.method, description: input.description?.trim() || "Standart to'lov" }));
+    });
+    return (await this.reports.rows({ studentId: invoice.studentId, groupId: invoice.groupId })).find((r) => r.id === invoiceId);
   }
 
   /** Admin payments page: every group with its plan, plus the history of sent notices. */

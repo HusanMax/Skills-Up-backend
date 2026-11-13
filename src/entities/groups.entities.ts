@@ -55,9 +55,28 @@ export class PaymentNotice {
   @Column({ type: Number }) recipients: number;
 }
 
+/**
+ * A "sale": what one student owes for one group and period (e.g. November). Payments are made against it, so its
+ * status is worked out from them: PAID, UNPAID or PARTIALLY_PAID.
+ */
+@Entity('invoices')
+@Index(['studentId', 'groupId', 'period'], { unique: true })
+export class Invoice {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column({ type: Number }) studentId: number;
+  @Index() @Column({ type: Number }) groupId: number;
+  @Column({ type: String }) period: string; // YYYY-MM
+  @Index() @Column({ type: String }) issuedAt: string; // YYYY-MM-DD, the sale date
+  @Column({ type: String }) dueDate: string; // YYYY-MM-DD
+  @Column({ type: Number }) amount: number; // so'm, the total owed
+  @CreateDateColumn() createdAt: Date;
+}
+
 @Entity('payments')
 export class Payment {
   @PrimaryGeneratedColumn() id: number;
+  /** the invoice this money pays for */
+  @Index() @Column({ type: Number, nullable: true }) invoiceId: number | null;
   @Index() @Column({ type: Number }) studentId: number;
   @Column({ type: Number }) groupId: number;
   @Column({ type: Number }) amount: number;

@@ -23,7 +23,7 @@ async function bootstrap() {
         return o;
       }
     });
-  app.enableCors({ origin: origins, credentials: true });
+  app.enableCors({ origin: origins, credentials: true, exposedHeaders: ['Content-Disposition'] });
   app.useGlobalPipes(appValidationPipe());
   app.useGlobalFilters(new AllExceptionsFilter());
 

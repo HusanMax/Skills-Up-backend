@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseIntPipe, Post, Put, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ArrayMinSize, IsArray, IsEnum, IsIn, IsInt, IsOptional, IsString, Matches, Min, MinLength } from 'class-validator';
 import { Roles, AuthUser, CurrentUser } from '../common/decorators';
@@ -6,6 +7,8 @@ import { Day, Role } from '../common/enums';
 import { RULES } from '../config/rules';
 import { GroupsService } from '../groups/groups.service';
 import { PaymentsService } from '../payments/payments.service';
+import { InvoiceStatus, ReportFilter, ReportsService } from '../payments/reports.service';
+import { DetailsService } from './details.service';
 import { RoomsService } from '../rooms/rooms.service';
 import { AdminService } from './admin.service';
 
@@ -66,13 +69,18 @@ class PlanDto {
   @IsInt() @Min(RULES.MIN_PAYMENT, { message: "To'lov so'mda, kamida 10 000." }) amount: number;
   @IsString() dueDate: string;
 }
-class RecordPaymentDto {
-  @IsInt() studentId: number;
+class InvoiceDto {
   @IsInt() groupId: number;
+  @IsOptional() @Matches(/^\d{4}-\d{2}$/, { message: "Davr YYYY-MM ko'rinishida bo'lsin." }) period?: string;
+  @IsOptional() @IsInt() amount?: number;
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) issuedAt?: string;
+  @Matches(/^\d{4}-\d{2}-\d{2}$/) dueDate: string;
+}
+class InvoicePaymentDto {
   @IsInt() @Min(1) amount: number;
-  @Matches(/^\d{4}-\d{2}-\d{2}$/) paidAt: string;
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) paidAt?: string;
   @IsString() method: string;
-  @IsString() description: string;
+  @IsOptional() @IsString() description?: string;
 }
 
 /** Administrator panel: students, teachers, accounts, rooms, groups and payments. */
@@ -81,7 +89,7 @@ class RecordPaymentDto {
 @Roles(Role.ADMIN)
 @Controller('admin')
 export class AdminController {
-  constructor(private admin: AdminService, private groups: GroupsService, private rooms: RoomsService, private payments: PaymentsService) {}
+  constructor(private admin: AdminService, private groups: GroupsService, private rooms: RoomsService, private payments: PaymentsService, private reports: ReportsService, private details: DetailsService) {}
 
   @Get('dashboard') dashboard() { return this.admin.dashboard(); }
 
@@ -145,5 +153,28 @@ export class AdminController {
   /** Sets the group's payment and notifies EVERY student of the group. */
   @Put('groups/:id/payment-plan')
   plan(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: PlanDto) { return this.payments.publish(u.id, id, dto.amount, dto.dueDate); }
-  @Post('payments') record(@Body() dto: RecordPaymentDto) { return this.payments.record(dto); }
+
+  // payments & sales reports
+  private filter(q: Record<string, string | undefined>): ReportFilter {
+    return { from: q.from || undefined, to: q.to || undefined, q: q.q || undefined, status: (q.status || undefined) as InvoiceStatus | undefined, groupId: q.groupId ? Number(q.groupId) : undefined };
+  }
+  /** Dashboard numbers, growth against the previous period, chart series and one page of the table. */
+  @Get('reports/payments')
+  report(@Query() q: Record<string, string | undefined>) { return this.reports.report(this.filter(q), Number(q.page) || 1, Number(q.limit) || 20); }
+  /** A real .xlsx with the same filters and ALL matching rows (not one page). */
+  @Get('reports/payments/export')
+  async exportReport(@Query() q: Record<string, string | undefined>, @Res() res: Response) {
+    const file = await this.reports.exportXlsx(this.filter(q));
+    res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Content-Disposition': `attachment; filename="tolovlar-hisoboti-${new Date().toISOString().slice(0, 10)}.xlsx"`, 'Content-Length': String(file.length) });
+    res.end(file);
+  }
+  /** Bills every student of a group for a period (students already billed are skipped). */
+  @Post('invoices') createInvoices(@Body() dto: InvoiceDto) { return this.payments.createInvoices(dto); }
+  @Post('invoices/:id/payments') addPayment(@Param('id', ParseIntPipe) id: number, @Body() dto: InvoicePaymentDto) { return this.payments.addPayment(id, dto); }
+
+  // "open one" pages
+  @Get('teachers/:id') teacher(@Param('id', ParseIntPipe) id: number) { return this.details.teacher(id); }
+  @Get('students/:id') student(@Param('id', ParseIntPipe) id: number) { return this.details.student(id); }
+  @Get('groups/:id') group(@Param('id', ParseIntPipe) id: number) { return this.details.group(id); }
+  @Get('rooms/:id') room(@Param('id', ParseIntPipe) id: number) { return this.details.room(id); }
 }
